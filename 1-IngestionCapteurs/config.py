@@ -3,8 +3,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Configuration de l'API source
-API_ENDPOINT = os.getenv('API_ENDPOINT', 'http://localhost:8080/api/sensor-data')
+KAFKA_BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
+KAFKA_TOPIC = os.getenv('KAFKA_TOPIC', 'sensor-data')
+KAFKA_GROUP_ID = os.getenv('KAFKA_GROUP_ID', 'ingestion-group')
 
-# Intervalle de récupération des données (en secondes)
-FETCH_INTERVAL = int(os.getenv('FETCH_INTERVAL', 2))
+DB_HOST = os.getenv('DB_HOST', 'localhost')
+DB_PORT = os.getenv('DB_PORT', '5432')
+DB_NAME = os.getenv('DB_NAME', 'agrotrace')
+DB_USER = os.getenv('DB_USER', 'agrotrace_user')
+DB_PASSWORD = os.getenv('DB_PASSWORD', 'agrotrace_pass')
