@@ -15,18 +15,6 @@ Système de collecte et traitement de données de capteurs IoT utilisant Apache 
 
 **Flux de données :** Simulateur génère des données Excel → Convertit en JSON → Envoie vers Kafka → Kafka stocke temporairement → Ingestion récupère et traite
 
-## Architecture
-
-```
-Simulateur → Kafka → Ingestion
-```
-
-- **Simulateur** : Lit des données Excel et les envoie vers Kafka
-- **Kafka** : Broker de messages (mode KRaft)
-- **Ingestion** : Consomme et traite les données depuis Kafka
-- **Kafka UI** : Interface de monitoring (http://localhost:8080)
-
-
 ## Configuration Kafka
 
 | Variable | Description |

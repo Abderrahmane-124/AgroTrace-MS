@@ -1,0 +1,8 @@
+kafka-python==2.0.2
+minio
+transformers
+torch
+torchvision
+Pillow
+numpy
+huggingface_hub
