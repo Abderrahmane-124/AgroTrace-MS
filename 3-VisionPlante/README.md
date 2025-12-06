@@ -1,245 +1,238 @@
-# 🌿 MS3 - VisionPlante
+# VisionPlante - Détection de Maladies Foliaires
 
 ## Description
+Microservice de vision par ordinateur qui utilise un modèle d'intelligence artificielle (EfficientNet-B2) pour détecter et classifier les maladies des plantes à partir d'images de feuilles. Le service lit les images depuis MinIO, applique le modèle de détection, puis publie les résultats dans Kafka et les stocke dans MinIO.
 
-Microservice de détection de maladies foliaires utilisant le modèle **Abuzaid01/plant-disease-classifier** depuis HuggingFace.
+---
 
-### Fonctionnalités
+## Données en Entrée
 
-- 🖼️ **Lecture d'images depuis MinIO** : Traite les images depuis `raw-uav-images/color/`
-- 🤖 **Détection de maladies** : Architecture PlantDiseaseClassifier (EfficientNet-B2 + Attention + Classifier)
-- 📊 **Classification multi-classes** : Détecte 14 classes de maladies foliaires avec 99.23% accuracy
-- 📤 **Publication Kafka** : Publie les résultats dans le topic `disease.detected`
-- 💾 **Sauvegarde des résultats** : JSON dans MinIO (`disease-detection-results`)
-- 🔄 **Auto-publish**: Publication automatique de toutes les images au démarrage (round-robin)
+### Source 1 : Apache Kafka
+- **Topic** : `image.uploaded` (configurable via `KAFKA_IMAGE_TOPIC`)
+- **Groupe de consommateurs** : `vision-plante-group`
+- **Format** : Événements JSON d'upload d'images
+  ```json
+  {
+    "event_type": "image_uploaded",
+    "timestamp": "ISO-8601",
+    "bucket": "raw-uav-images",
+    "image_path": "mixed_images/ClassName_1_image.jpg",
+    "object_name": "chemin/image.jpg",
+    "class_name": "nom_classe"
+  }
+  ```
 
-## Architecture
+### Source 2 : MinIO (Object Storage)
+- **Bucket source** : `raw-uav-images` (configurable via `MINIO_RAW_BUCKET`)
+- **Dossier** : `mixed_images/` (configurable via `IMAGE_FOLDER_PREFIX`)
+- **Formats supportés** : `.jpg`, `.jpeg`, `.png`, `.bmp`, `.gif`
+- **Contenu** : Images de feuilles de plantes capturées par drones UAV
 
-```
-┌─────────────────┐
-│  Kafka Topic    │
-│ image.uploaded  │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────────────────────────┐
-│     VisionPlante Service            │
-│                                     │
-│  1. Écoute événements Kafka        │
-│  2. Télécharge image depuis MinIO  │
-│  3. Détection avec EfficientNet-B2 │
-│  4. Publie résultats Kafka         │
-│  5. Sauvegarde JSON dans MinIO     │
-└─────────┬───────────────────────────┘
-          │
-          ├──────────────┬─────────────┐
-          ▼              ▼             ▼
-  ┌──────────────┐  ┌─────────┐  ┌──────────┐
-  │ Kafka Topic  │  │  MinIO  │  │  Logs    │
-  │disease.detected│ │ Results │  │          │
-  └──────────────┘  └─────────┘  └──────────┘
-```
+### Configuration
+**Kafka** :
+- `KAFKA_BOOTSTRAP_SERVERS` : Adresse du broker (défaut: `localhost:9092`)
+- `KAFKA_IMAGE_TOPIC` : Topic d'entrée (défaut: `image.uploaded`)
+- `KAFKA_DISEASE_TOPIC` : Topic de sortie (défaut: `disease.detected`)
+- `KAFKA_GROUP_ID` : Groupe de consommateurs (défaut: `vision-plante-group`)
 
-## Modèle IA
+**MinIO** :
+- `MINIO_ENDPOINT` : Adresse du serveur (défaut: `localhost:9000`)
+- `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` : Identifiants
+- `MINIO_RAW_BUCKET` : Bucket source (défaut: `raw-uav-images`)
+- `MINIO_RESULTS_BUCKET` : Bucket résultats (défaut: `disease-detection-results`)
 
-**Nom**: `Abuzaid01/plant-disease-classifier`
+**Modèle IA** :
+- `MODEL_NAME` : HuggingFace model ID (défaut: `Abuzaid01/plant-disease-classifier`)
+- `MODEL_DEVICE` : Device d'inférence (défaut: `cpu`, option: `cuda`)
+- `CONFIDENCE_THRESHOLD` : Seuil de confiance (défaut: `0.5`)
 
-### Architecture
+**Mode automatique** :
+- `AUTO_PUBLISH_ON_STARTUP` : Publier toutes les images au démarrage (défaut: `True`)
 
-Le modèle utilise une architecture personnalisée `PlantDiseaseClassifier` composée de:
+---
 
-1. **Backbone**: EfficientNet-B2 pré-entraîné
-   - Extraction de features à partir des images
-   - 506 couches de poids
+## Traitement Interne
 
-2. **Attention Mechanism**
-   - Mécanisme d'attention adaptatif
-   - Pondération des features importantes
-   - 4 couches de poids
+### 1. Initialisation du Modèle
+- **Architecture** : PlantDiseaseClassifier avec backbone EfficientNet-B2
+- **Composants** :
+  - Backbone EfficientNet pré-entraîné
+  - Mécanisme d'attention (améliore la détection)
+  - Classificateur personnalisé avec dropout et batch normalization
+- **Chargement** : Téléchargement automatique depuis HuggingFace Hub
+- **Device** : GPU (CUDA) si disponible, sinon CPU
 
-3. **Custom Classifier**
-   - Couches fully-connected avec BatchNorm et Dropout
-   - 512 → 256 → 14 classes
-   - 16 couches de poids
+### 2. Prétraitement des Images
+Transformations appliquées avant inférence :
+- **Redimensionnement** : 256×256 pixels
+- **Crop central** : 224×224 pixels
+- **Conversion** : Tenseur PyTorch
+- **Normalisation** : Moyenne [0.485, 0.456, 0.406], Écart-type [0.229, 0.224, 0.225]
+- **Conversion RGB** : Si l'image n'est pas en RGB
 
-**Total**: 526 couches de poids chargées depuis HuggingFace
+### 3. Détection de Maladies
+- **Inférence** : Forward pass avec `torch.no_grad()` (pas de calcul de gradients)
+- **Sortie** : Logits convertis en probabilités via softmax
+- **Top-5** : Extraction des 5 prédictions les plus probables
+- **Classification** : Détermine si la plante est malade ou saine
 
-### Performance
+### 4. Mode Round-Robin (Publication Automatique)
+Si `AUTO_PUBLISH_ON_STARTUP=True` :
+- Scan de toutes les images dans `mixed_images/`
+- Groupement par classe (extrait du nom de fichier)
+- Création d'une file en rotation (1 image/classe à tour de rôle)
+- Publication séquentielle des événements dans Kafka
+- Assure une distribution équilibrée entre les classes
 
-- **Accuracy validation**: 99.23%
-- **Epochs d'entraînement**: 30
-- **Optimiseur**: AdamW
-- **Scheduler**: CosineAnnealingWarmRestarts
+---
 
-### Classes détectées
+## Données en Sortie
 
-14 classes de maladies foliaires:
-- **Apple**: Apple_scab, Black_rot, Cedar_apple_rust, healthy
-- **Corn**: Cercospora_leaf_spot, Common_rust, Northern_Leaf_Blight, healthy  
-- **Tomato**: Bacterial_spot, Early_blight, Late_blight, Leaf_Mold, Septoria_leaf_spot, Target_Spot, healthy
+### Destination 1 : Apache Kafka
+- **Topic** : `disease.detected` (configurable)
+- **Format** : Résultats de détection au format JSON
 
-### Prétraitement des images
-
-- **Resize**: 256×256
-- **Center Crop**: 224×224
-- **Normalisation**: ImageNet (mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-- **Format**: RGB uniquement
-
-## Configuration
-
-### Variables d'environnement
-
-```bash
-# Kafka
-KAFKA_BOOTSTRAP_SERVERS=kafka-broker:9092
-KAFKA_IMAGE_TOPIC=image.uploaded
-KAFKA_DISEASE_TOPIC=disease.detected
-KAFKA_GROUP_ID=vision-plante-group
-
-# MinIO
-MINIO_ENDPOINT=minio:9000
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=minioadmin
-MINIO_SECURE=False
-MINIO_RAW_BUCKET=raw-uav-images
-MINIO_RESULTS_BUCKET=disease-detection-results
-
-# Modèle
-MODEL_NAME=Abuzaid01/plant-disease-classifier
-MODEL_DEVICE=cpu  # ou "cuda" si GPU disponible
-CONFIDENCE_THRESHOLD=0.5
-
-# Traitement
-BATCH_SIZE=1
-IMAGE_FOLDER_PREFIX=color/
-AUTO_PUBLISH_ON_STARTUP=True  # Publication automatique des images au démarrage
-```
-
-## Utilisation
-
-### Démarrage local
-
-```bash
-cd 3-VisionPlante
-
-# Installer les dépendances
-pip install -r requirements.txt
-
-# Lancer le service
-python vision_plante.py
-```
-
-### Avec Docker
-
-```bash
-# Build
-docker build -t agrotrace-vision-plante:latest .
-
-# Run
-docker run -it --rm \
-  -e KAFKA_BOOTSTRAP_SERVERS=kafka-broker:9092 \
-  -e MINIO_ENDPOINT=minio:9000 \
-  agrotrace-vision-plante:latest
-```
-
-### Avec Docker Compose
-
-```bash
-# Démarrer le service (publication automatique des images activée par défaut)
-docker compose up vision-plante
-
-# Pour désactiver la publication automatique
-docker compose up vision-plante -e AUTO_PUBLISH_ON_STARTUP=False
-```
-
-**Note**: Le service publie automatiquement toutes les images de MinIO (`raw-uav-images/color/`) au démarrage en ordre aléatoire avec rotation entre classes.
-
-## Format des événements
-
-### Input (Kafka `image.uploaded`)
-
+#### Structure des Messages Kafka
 ```json
 {
-  "image_path": "color/Apple___Apple_scab/image_001.jpg",
-  "bucket": "raw-uav-images",
-  "timestamp": "2025-12-04T15:30:45.123456",
-  "size_bytes": 2457600
-}
-```
-
-### Output (Kafka `disease.detected`)
-
-```json
-{
-  "image_path": "color/Apple___Apple_scab/image_001.jpg",
-  "image_size": [256, 256],
+  "image_path": "mixed_images/Apple___Apple_scab_1.jpg",
+  "image_size": [width, height],
   "detection_results": {
     "predicted_class": "Apple___Apple_scab",
-    "confidence": 0.9823,
+    "confidence": 0.9523,
     "top_5_predictions": [
-      {"class": "Apple___Apple_scab", "confidence": 0.9823},
-      {"class": "Apple___Black_rot", "confidence": 0.0124},
-      {"class": "Apple___Cedar_apple_rust", "confidence": 0.0034},
-      {"class": "Apple___healthy", "confidence": 0.0012},
-      {"class": "Tomato___Early_blight", "confidence": 0.0005}
+      {"class": "Apple___Apple_scab", "confidence": 0.9523},
+      {"class": "Apple___Black_rot", "confidence": 0.0312},
+      ...
     ],
     "is_diseased": true
   },
-  "inference_time_ms": 234.56,
+  "inference_time_ms": 245.67,
   "model_name": "Abuzaid01/plant-disease-classifier",
-  "timestamp": "2025-12-04T15:30:45.456789",
-  "device": "cpu"
+  "timestamp": "ISO-8601",
+  "device": "cuda:0"
 }
 ```
 
-## Performance
+#### Champs Clés
+- `predicted_class` : Classe prédite (plante + maladie)
+- `confidence` : Score de confiance [0-1]
+- `top_5_predictions` : Top 5 prédictions alternatives
+- `is_diseased` : `true` si maladie détectée (seuil ≥ 0.5 et pas "healthy")
+- `inference_time_ms` : Temps de calcul en millisecondes
+
+### Destination 2 : MinIO
+- **Bucket** : `disease-detection-results`
+- **Structure** : `results/{class_name}/{filename}.json`
+- **Format** : JSON identique aux messages Kafka
+- **Usage** : Stockage persistant et analyse batch
+
+---
+
+## Flux de Traitement
+
+### Séquence Standard
+1. **Écoute Kafka** : Attente d'événements sur topic `image.uploaded`
+2. **Réception événement** : Parse du message JSON avec chemin image
+3. **Téléchargement** : Récupération de l'image depuis MinIO
+4. **Validation** : Vérification format et conversion RGB si nécessaire
+5. **Prétraitement** : Application des transformations (resize, crop, normalize)
+6. **Inférence** : Passage dans le modèle deep learning
+7. **Post-traitement** : Softmax, extraction top-5, classification maladie/sain
+8. **Double publication** :
+   - Message Kafka vers topic `disease.detected`
+   - JSON dans MinIO bucket `disease-detection-results`
+
+### Mode Auto-Publish (Démarrage)
+Si `AUTO_PUBLISH_ON_STARTUP=True` :
+1. Scan complet du bucket `raw-uav-images/mixed_images/`
+2. Groupement par classe (extraction du nom de fichier)
+3. Création file round-robin (rotation équitable)
+4. Publication séquentielle de tous les événements
+5. Traitement automatique via la boucle standard
+
+---
+
+## Architecture du Modèle
+
+### PlantDiseaseClassifier
+- **Backbone** : EfficientNet-B2 (features extraction)
+- **Attention** : Mécanisme d'attention spatiale
+  - AdaptiveAvgPool2d → Linear (compression) → ReLU → Linear → Sigmoid
+  - Pondère les features importantes
+- **Classificateur** : 3 couches fully-connected
+  - Features → 512 → 256 → num_classes
+  - Dropout (30%, 15%, 9%) pour régularisation
+  - Batch Normalization pour stabilité
+
+### Caractéristiques
+- **Entrée** : Images RGB 224×224
+- **Sortie** : Probabilités pour ~38 classes de maladies
+- **Source** : HuggingFace (`Abuzaid01/plant-disease-classifier`)
+- **Performance** : Accuracy validation incluse dans le checkpoint
+
+---
+
+## Script d'Analyse (analyze_results.py)
+
+Script utilitaire pour analyser les résultats de détection :
+
+### Fonctionnalités
+- Lecture de tous les JSON dans `disease-detection-results/results/`
+- Calcul de statistiques globales :
+  - Total images analysées
+  - Taux de détection maladies vs saines
+  - Confiance moyenne/min/max
+  - Temps d'inférence moyen
+- **Précision par classe** : Top 10 et Bottom 5
+- **Précision globale** : Taux de prédictions correctes
+- **Classes les plus prédites** : Distribution des prédictions
+
+### Usage
+Permet d'évaluer les performances du modèle sur un dataset complet et identifier les classes problématiques.
+
+---
+
+## Monitoring et Statistiques
+
+### Métriques en Temps Réel
+- **Images traitées** : Compteur total
+- **Maladies détectées** : Nombre de plantes malades identifiées
+- **Erreurs** : Compteur d'échecs
+- **Temps d'inférence** : Par image (en millisecondes)
+
+### Logs Détaillés
+Pour chaque image :
+- Chemin et dimensions
+- Classe prédite avec confiance
+- Statut malade/sain
+- Temps d'inférence
+- Confirmation publication Kafka (topic, partition, offset)
+- Sauvegarde MinIO
+
+### Publication Automatique
+- Progression en temps réel (tous les 100 images)
+- Taux de traitement (images/seconde)
+- Distribution équilibrée par rotation
+
+---
+
+## Arrêt Gracieux
+
+- Fermeture propre du Consumer Kafka
+- Flush et fermeture du Producer Kafka
+- Affichage statistiques finales :
+  - Total images traitées
+  - Total maladies détectées
+  - Total erreurs
+
+---
 
 ## Dépendances
 
-- **torch**: 2.1.2 (PyTorch CPU-optimized)
-- **torchvision**: 0.16.2
-- **transformers**: 4.40.0 (HuggingFace)
-- **huggingface_hub**: 0.20.0 (Téléchargement modèle)
-- **Pillow**: 10.1.0 (Traitement d'images)
-- **kafka-python**: 2.0.2
-- **minio**: 7.2.0
-- **numpy**: 1.24.3
-
-### Optimisation Docker
-
-- **Image size**: ~1.93 GB (optimisé avec PyTorch CPU-only)
-- **Index PyTorch**: `https://download.pytorch.org/whl/cpu`
-- **Build time**: ~5-10 minutes (selon connexion)
-## Monitoring
-
-Le service affiche les statistiques en temps réel:
-
-```
-========================================================================
-🖼️  TRAITEMENT: color/Apple___Apple_scab/image_001.jpg
-========================================================================
-   📐 Dimensions: 256×256
-   🎯 Prédiction: Apple___Apple_scab
-   📊 Confiance: 98.23%
-   🩺 Malade: Oui
-   ⏱️  Temps d'inférence: 0.235s
-   ✅ Résultat publié dans Kafka
-      Topic: disease.detected
-      Partition: 0
-      Offset: 1234
-   💾 Résultats sauvegardés: s3://disease-detection-results/results/Apple___Apple_scab/image_001.json
-   📊 Stats: 1 images, 1 maladies détectées
-```
-
-## Dépendances
-
-- **transformers**: 4.36.0 (HuggingFace)
-- **torch**: 2.1.2 (PyTorch)
-- **torchvision**: 0.16.2
-- **Pillow**: 10.1.0 (Traitement d'images)
-- **kafka-python**: 2.0.2
-- **minio**: 7.2.0
-
-## Licence
-
-Projet AgroTrace - MS3 VisionPlante
+- `torch` / `torchvision` : Framework deep learning et transformations
+- `transformers` / `huggingface_hub` : Chargement modèle depuis HuggingFace
+- `Pillow` : Manipulation d'images
+- `numpy` : Calculs numériques
+- `kafka-python` : Client Kafka Consumer/Producer
+- `minio` : Client object storage MinIO
