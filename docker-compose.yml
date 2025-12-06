@@ -167,6 +167,36 @@ services:
     #           count: 1
     #           capabilities: [gpu]
 
+  prevision-eau:
+    build: ./4-PrévisionEau
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka-broker:9092
+      - KAFKA_SENSOR_TOPIC=sensor-data-processed
+      - KAFKA_FORECAST_TOPIC=water.forecast
+      - KAFKA_GROUP_ID=water-forecast-group
+      - DB_HOST=timescaledb
+      - DB_PORT=5432
+      - DB_NAME=agrotrace
+      - DB_USER=agrotrace_user
+      - DB_PASSWORD=agrotrace_pass
+      - FORECAST_HORIZON=7
+      - TRAINING_WINDOW_DAYS=30
+      - MIN_DATA_POINTS=10
+      - RETRAINING_INTERVAL_HOURS=6
+      - PUBLISH_INTERVAL_MINUTES=60
+      - WATER_STRESS_THRESHOLD_LOW=30.0
+      - WATER_STRESS_THRESHOLD_MEDIUM=50.0
+      - WATER_STRESS_THRESHOLD_HIGH=70.0
+    depends_on:
+      kafka-broker:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+      preprocessing:
+        condition: service_started
+    networks:
+      - agrotrace-network
+
 volumes:
   kafka_data:
   timescaledb_data:

@@ -1,5 +1,5 @@
 # GitIgnore pour AgroTrace-MS
-
+mixed_images/
 # Python
 __pycache__/
 *.py[cod]

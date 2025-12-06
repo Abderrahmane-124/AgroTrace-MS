@@ -22,9 +22,12 @@ MOVING_AVERAGE_WINDOW = int(os.getenv('MOVING_AVERAGE_WINDOW', '5'))
 
 # Plages de valeurs normales pour chaque type de capteur
 SENSOR_RANGES = {
-    'Temperature': {'min': -10.0, 'max': 50.0},
+    'Environment Temperature': {'min': -10.0, 'max': 50.0},
     'Environment Humidity': {'min': 0.0, 'max': 100.0},
     'Soil Moisture': {'min': 0.0, 'max': 100.0},
     'Soil pH': {'min': 0.0, 'max': 14.0},
-    'Light Intensity': {'min': 0.0, 'max': 100000.0},
+    'Soil Temperature': {'min': -10.0, 'max': 50.0},
+    'Environment Light Intensity': {'min': 0.0, 'max': 100000.0},
+    'Solar Panel Battery Voltage': {'min': 0.0, 'max': 50.0},
+    'Water TDS': {'min': 0.0, 'max': 2000.0},
 }

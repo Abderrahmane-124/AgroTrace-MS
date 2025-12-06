@@ -182,7 +182,35 @@ class SensorDataIngestionKafka:
                 harmonized['data_index'] = None
         
         # 4. Extraire et nettoyer les mesures
-        if 'measurements' in raw_data:
+        # NOUVEAU FORMAT: avec 'value', 'unit', 'entry_id', 'original_timestamp'
+        if 'value' in raw_data:
+            # Format mis à jour depuis le simulateur
+            sensor_type = harmonized['sensor_type'] or 'unknown'
+            
+            # Ajouter la valeur principale avec une clé basée sur le sensor_type
+            if raw_data['value'] is not None:
+                try:
+                    harmonized['measurements']['value'] = float(raw_data['value'])
+                except (ValueError, TypeError):
+                    harmonized['measurements']['value'] = raw_data['value']
+            
+            # Ajouter l'unité si disponible
+            if 'unit' in raw_data and raw_data['unit']:
+                harmonized['measurements']['unit'] = str(raw_data['unit'])
+            
+            # Ajouter l'entry_id si disponible
+            if 'entry_id' in raw_data and raw_data['entry_id'] is not None:
+                try:
+                    harmonized['measurements']['entry_id'] = int(raw_data['entry_id'])
+                except (ValueError, TypeError):
+                    harmonized['measurements']['entry_id'] = str(raw_data['entry_id'])
+            
+            # Ajouter le timestamp original si disponible
+            if 'original_timestamp' in raw_data and raw_data['original_timestamp']:
+                harmonized['measurements']['original_timestamp'] = str(raw_data['original_timestamp'])
+        
+        # ANCIEN FORMAT: avec sous-dictionnaire 'measurements'
+        elif 'measurements' in raw_data:
             measurements = raw_data['measurements']
             if isinstance(measurements, dict):
                 for key, value in measurements.items():
@@ -205,7 +233,7 @@ class SensorDataIngestionKafka:
                             # Si conversion impossible, garder tel quel
                             harmonized['measurements'][normalized_key] = str(value)
         else:
-            # Si pas de sous-dictionnaire measurements, tout mettre dedans sauf les champs connus
+            # Si pas de sous-dictionnaire measurements ni de 'value', tout mettre dedans sauf les champs connus
             for key, value in raw_data.items():
                 if key not in ['sensor_type', 'timestamp', 'data_index']:
                     normalized_key = key.lower().replace(' ', '_').replace('-', '_')

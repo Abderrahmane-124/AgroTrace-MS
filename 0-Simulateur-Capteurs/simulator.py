@@ -59,7 +59,19 @@ class IoTSensorSimulatorKafka:
         for file_path in excel_files:
             sensor_name = file_path.stem
             try:
+                # Lire le fichier Excel
                 df = pd.read_excel(file_path)
+                
+                # La première ligne contient les vrais en-têtes
+                # Extraire les en-têtes de la première ligne
+                headers = df.iloc[0].tolist()
+                
+                # Renommer les colonnes avec ces en-têtes
+                df.columns = headers
+                
+                # Supprimer la première ligne (maintenant que les en-têtes sont définis)
+                df = df.iloc[1:].reset_index(drop=True)
+                
                 self.sensor_data[sensor_name] = df
                 self.last_indices[sensor_name] = -1
                 print(f"✓ Chargé: {sensor_name} ({len(df)} lignes)")
@@ -101,26 +113,58 @@ class IoTSensorSimulatorKafka:
         
         row = df.iloc[random_index]
         
+        # Extraire les valeurs importantes
+        # Les colonnes sont: Date & Time Created, Entry_id, Measurement Unit
+        timestamp_col = df.columns[0]  # Date & Time Created
+        entry_id_col = df.columns[1]   # Entry_id
+        value_col = df.columns[2]      # Measurement Unit (valeur réelle)
+        
         # Convertir la ligne en dictionnaire JSON
         data = {
             'sensor_type': sensor_name,
             'timestamp': datetime.now().isoformat(),
             'data_index': int(random_index),
-            'measurements': {}
+            'original_timestamp': None,
+            'entry_id': None,
+            'value': None,
+            'unit': None
         }
         
-        # Ajouter toutes les colonnes comme mesures
-        for column in df.columns:
-            value = row[column]
-            # Convertir les types pandas en types Python natifs
-            if pd.isna(value):
-                data['measurements'][column] = None
-            elif isinstance(value, (pd.Timestamp, datetime)):
-                data['measurements'][column] = value.isoformat()
-            elif isinstance(value, (int, float)):
-                data['measurements'][column] = float(value) if not pd.isna(value) else None
+        # Extraire le timestamp original
+        original_ts = row[timestamp_col]
+        if pd.notna(original_ts):
+            if isinstance(original_ts, (pd.Timestamp, datetime)):
+                data['original_timestamp'] = original_ts.isoformat()
             else:
-                data['measurements'][column] = str(value)
+                data['original_timestamp'] = str(original_ts)
+        
+        # Extraire l'Entry_id
+        entry_id = row[entry_id_col]
+        if pd.notna(entry_id):
+            try:
+                data['entry_id'] = int(entry_id)
+            except (ValueError, TypeError):
+                data['entry_id'] = str(entry_id)
+        
+        # Extraire la valeur réelle (de la colonne Measurement Unit)
+        measurement_value = row[value_col]
+        if pd.notna(measurement_value):
+            try:
+                data['value'] = float(measurement_value)
+            except (ValueError, TypeError):
+                data['value'] = str(measurement_value)
+        
+        # Extraire l'unité depuis le nom de la colonne (ex: "Measurement Unit(Degree Celsius)")
+        if 'Measurement Unit' in value_col:
+            # Extraire l'unité entre parenthèses
+            import re
+            unit_match = re.search(r'\(([^)]+)\)', value_col)
+            if unit_match:
+                data['unit'] = unit_match.group(1)
+            else:
+                data['unit'] = value_col.replace('Measurement Unit', '').strip()
+        else:
+            data['unit'] = value_col
         
         return data
     

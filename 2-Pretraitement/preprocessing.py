@@ -207,7 +207,19 @@ class SensorDataPreprocessor:
         try:
             sensor_type = raw_data.get('sensor_type')
             timestamp = raw_data.get('timestamp')
-            measurements = raw_data.get('measurements', {})
+            
+            # IMPORTANT: Le simulateur envoie les données de deux façons possibles:
+            # 1. NOUVEAU FORMAT: Les champs sont au niveau racine (value, unit, entry_id)
+            # 2. ANCIEN FORMAT (depuis MS1): Les données sont dans 'measurements' après harmonisation
+            
+            # Déterminer le format et extraire les measurements
+            if 'measurements' in raw_data:
+                # Format harmonisé depuis MS1-Ingestion
+                measurements = raw_data.get('measurements', {})
+            else:
+                # Format direct depuis simulateur - tout sauf sensor_type, timestamp, data_index
+                measurements = {k: v for k, v in raw_data.items() 
+                               if k not in ['sensor_type', 'timestamp', 'data_index']}
             
             if not sensor_type or not timestamp:
                 return None
@@ -274,26 +286,94 @@ class SensorDataPreprocessor:
     def _extract_value(self, sensor_type: str, measurements: Dict) -> Optional[float]:
         """Extrait la valeur principale selon le type de capteur"""
         try:
-            if sensor_type == 'Temperature':
-                return float(measurements.get('Temperature (°C)', 0))
-            elif sensor_type == 'Environment Humidity':
-                return float(measurements.get('Environment Humidity (%)', 0))
-            elif sensor_type == 'Soil Moisture':
-                return float(measurements.get('Soil Moisture (%)', 0))
-            elif sensor_type == 'Soil pH':
-                return float(measurements.get('Soil pH', 0))
-            elif sensor_type == 'Light Intensity':
-                return float(measurements.get('Light Intensity (lux)', 0))
-            else:
-                # Prendre la première valeur numérique disponible
-                for key, value in measurements.items():
-                    try:
-                        return float(value)
-                    except:
-                        continue
+            # Debug: afficher les clés disponibles pour diagnostic
+            if self.processed_count % 20 == 0:  # Afficher tous les 20 messages
+                print(f"   🔍 Debug {sensor_type}:")
+                print(f"      measurements = {measurements}")
+            
+            # NOUVEAU FORMAT: Le simulateur envoie maintenant des données avec 'value', 'unit', 'entry_id', etc.
+            # Stratégie 1: Chercher le champ 'value' (nouveau format du simulateur)
+            if 'value' in measurements:
+                try:
+                    value = float(measurements['value'])
+                    if self.processed_count % 20 == 0:
+                        print(f"      ✓ NOUVEAU FORMAT: 'value' = {value}")
+                    if value is not None and value == value:  # Check for NaN (NaN != NaN)
+                        return value
+                except Exception as e:
+                    print(f"      ✗ Erreur conversion 'value': {e}")
+            
+            # ANCIEN FORMAT (pour compatibilité): Structure avec "Unnamed: 2" 
+            # (au cas où certaines données anciennes existent encore)
+            if "Unnamed: 2" in measurements:
+                try:
+                    value = float(measurements["Unnamed: 2"])
+                    if self.processed_count % 20 == 0:
+                        print(f"      ✓ ANCIEN FORMAT: 'Unnamed: 2' = {value}")
+                    if value is not None and value == value:
+                        return value
+                except Exception as e:
+                    if self.processed_count % 20 == 0:
+                        print(f"      ✗ Erreur conversion 'Unnamed: 2': {e}")
+            
+            # Stratégie 2: Chercher par pattern de nom de capteur (clés normalisées)
+            # (pour compatibilité avec MS1-Ingestion qui normalise les données)
+            search_patterns = {
+                'Environment Temperature': ['temperature'],
+                'Environment Humidity': ['humidity'],
+                'Soil Moisture': ['moisture'],
+                'Soil pH': ['ph'],
+                'Soil Temperature': ['temperature'],
+                'Environment Light Intensity': ['light', 'intensity'],
+                'Solar Panel Battery Voltage': ['voltage', 'battery'],
+                'Water TDS': ['tds'],
+            }
+            
+            patterns = search_patterns.get(sensor_type, [])
+            
+            for key, value in measurements.items():
+                # Skip les colonnes métadonnées
+                if key.lower() in ['entry_id', 'unit', 'original_timestamp']:
+                    continue
+                if 'unnamed: 1' in key.lower() or isinstance(value, str):
+                    continue
+                
+                # Si on a des patterns, chercher correspondance
+                if patterns:
+                    if any(pattern in key.lower() for pattern in patterns):
+                        try:
+                            return float(value)
+                        except:
+                            continue
+            
+            # Stratégie 3: Prendre la première valeur numérique (excluant métadonnées)
+            numeric_values = []
+            for key, value in measurements.items():
+                # Skip les métadonnées connues
+                if key.lower() in ['entry_id', 'unit', 'original_timestamp', 'unnamed: 1']:
+                    continue
+                try:
+                    num_val = float(value)
+                    if num_val == num_val:  # Check for NaN (NaN != NaN)
+                        numeric_values.append(num_val)
+                except:
+                    continue
+            
+            if numeric_values:
+                if self.processed_count % 20 == 0:
+                    print(f"      ✓ Stratégie 3: première valeur numérique = {numeric_values[0]}")
+                return numeric_values[0]
+            
+            if self.processed_count % 20 == 0:
+                print(f"      ✗ Aucune valeur trouvée dans measurements")
+                print(f"      Clés disponibles: {list(measurements.keys())}")
+            
             return None
+            
         except Exception as e:
-            print(f"✗ Erreur extraction valeur: {e}")
+            print(f"✗ Erreur extraction valeur {sensor_type}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def _detect_anomaly(self, sensor_type: str, value: float) -> bool:
