@@ -178,54 +178,69 @@ class VisionPlanteService:
     
     def load_model(self):
         """Charger le modèle depuis HuggingFace"""
-        print(f"\n🤖 Chargement du modèle: {config.MODEL_NAME}")
+        print(f"\n🤖 Chargement du modèle: {config.MODEL_NAME}", flush=True)
         
         try:
             # Déterminer le device (GPU ou CPU)
+            print(f"   🔍 Détermination du device...", flush=True)
             if config.MODEL_DEVICE == "cuda" and torch.cuda.is_available():
                 self.device = torch.device("cuda")
-                print(f"   🚀 GPU détecté: {torch.cuda.get_device_name(0)}")
+                print(f"   🚀 GPU détecté: {torch.cuda.get_device_name(0)}", flush=True)
             else:
                 self.device = torch.device("cpu")
-                print(f"   💻 Utilisation du CPU")
+                print(f"   💻 Utilisation du CPU", flush=True)
             
             # Définir les transformations d'image (selon la doc du modèle)
-            print(f"   🖼️  Configuration des transformations d'images...")
+            print(f"   🖼️  Configuration des transformations d'images...", flush=True)
             self.transform = transforms.Compose([
                 transforms.Resize(256),
                 transforms.CenterCrop(224),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
             ])
+            print(f"   ✅ Transformations configurées", flush=True)
             
             # Télécharger les fichiers du modèle depuis HuggingFace
-            print(f"   📥 Téléchargement des fichiers depuis HuggingFace...")
+            print(f"   📥 Téléchargement du modèle depuis HuggingFace...", flush=True)
+            print(f"      Repo: {config.MODEL_NAME}", flush=True)
+            print(f"      Fichier 1: model.pth (peut prendre plusieurs minutes)...", flush=True)
             model_path = hf_hub_download(repo_id=config.MODEL_NAME, filename="model.pth")
+            print(f"   ✅ model.pth téléchargé: {model_path}", flush=True)
+            
+            print(f"      Fichier 2: config.json...", flush=True)
             config_path = hf_hub_download(repo_id=config.MODEL_NAME, filename="config.json")
+            print(f"   ✅ config.json téléchargé: {config_path}", flush=True)
             
             # Charger la configuration
-            print(f"   📄 Lecture de la configuration...")
+            print(f"   📄 Lecture de la configuration...", flush=True)
             with open(config_path, 'r') as f:
                 model_config = json.load(f)
             
             self.class_names = model_config['class_names']
             num_classes = model_config['num_classes']
+            print(f"   ✅ Configuration lue: {num_classes} classes", flush=True)
             
             # Charger le checkpoint
-            print(f"   ⚙️  Chargement du checkpoint...")
+            print(f"   ⚙️  Chargement du checkpoint (peut prendre du temps)...", flush=True)
             checkpoint = torch.load(model_path, map_location=self.device)
+            print(f"   ✅ Checkpoint chargé en mémoire", flush=True)
             
             # Créer le modèle avec l'architecture correcte
-            print(f"   🔧 Création du modèle PlantDiseaseClassifier...")
-            self.model = PlantDiseaseClassifier(num_classes=num_classes, dropout_rate=0.3)
+            print(f"   🔧 Création du modèle PlantDiseaseClassifier...", flush=True)
+            self.model = PlantDiseaseClassifier(num_classes=num_classes)
+            print(f"   ✅ Modèle créé", flush=True)
             
             # Charger les poids pré-entraînés
+            print(f"   📦 Chargement des poids du modèle...", flush=True)
             state_dict = checkpoint.get('model_state_dict', checkpoint)
             result = self.model.load_state_dict(state_dict, strict=False)
+            print(f"   ✅ Poids chargés", flush=True)
             
             # Déplacer vers le device et mode évaluation
+            print(f"   🔄 Transfert vers {self.device}...", flush=True)
             self.model.to(self.device)
             self.model.eval()
+            print(f"   ✅ Modèle en mode évaluation", flush=True)
             
             print(f"✅ Modèle chargé avec succès")
             print(f"   📊 Nombre de classes: {num_classes}")
@@ -361,29 +376,47 @@ class VisionPlanteService:
             # Filtrer les images
             if obj.object_name.lower().endswith(tuple(config.SUPPORTED_FORMATS)):
                 # Extraire le nom de classe depuis le nom de fichier
-                # Ex: mixed_images/Apple___Apple_scab_1_image.jpg -> Apple___Apple_scab
+                # Gère plusieurs formats:
+                # - Apple___Apple_scab_1_image.jpg -> Apple___Apple_scab
+                # - Apple_scab.jpg -> Apple_scab
+                # - image001.jpg -> mixed
                 filename = Path(obj.object_name).stem
                 
-                # Le nom de classe est avant le premier chiffre suivi d'underscore
-                # Format: ClassName_1_originalname.jpg
+                # Stratégie 1: Chercher pattern ClassName_Number_*
                 parts = filename.split('_')
+                class_name = None
                 
                 # Trouver l'index du premier nombre pour extraire la classe
-                class_name = None
                 for i, part in enumerate(parts):
-                    if part.isdigit():
+                    if part.isdigit() and i > 0:
                         # La classe est tout ce qui précède ce nombre
                         class_name = '_'.join(parts[:i])
                         break
                 
-                # Si pas de nombre trouvé, utiliser le nom complet
+                # Stratégie 2: Si pas de nombre trouvé, vérifier si format standard
+                # Ex: Apple___Apple_scab.jpg (avec triple underscore)
                 if not class_name:
-                    class_name = filename
+                    if '___' in filename:
+                        # Format standard: Plante___Maladie
+                        class_name = filename
+                    elif filename.replace('_', '').replace('-', '').isalnum():
+                        # Nom de fichier simple, probablement une classe
+                        class_name = filename
+                    else:
+                        # Fallback: groupe "mixed" pour fichiers non classifiables
+                        class_name = "mixed"
+                
+                # Nettoyer le nom de classe (retirer espaces, caractères spéciaux)
+                class_name = class_name.strip().replace(' ', '_')
                 
                 if class_name not in images_by_folder:
                     images_by_folder[class_name] = []
                 
                 images_by_folder[class_name].append(obj.object_name)
+                
+                # Debug: afficher les premiers parsings
+                if len(images_by_folder) <= 3 and len(images_by_folder[class_name]) == 1:
+                    print(f"   🔍 Parse: '{filename}' → classe: '{class_name}'")
         
         # Mélanger les images dans chaque dossier
         for class_name in images_by_folder:
@@ -438,7 +471,11 @@ class VisionPlanteService:
         images_by_folder = self._get_all_images_by_folder(bucket)
         
         if not images_by_folder:
-            print(f"⚠️  Aucune image trouvée")
+            print(f"⚠️  Aucune image trouvée dans s3://{bucket}/{config.IMAGE_FOLDER_PREFIX}")
+            print(f"⚠️  Vérifiez que:")
+            print(f"    1. Le bucket '{bucket}' existe")
+            print(f"    2. Le dossier '{config.IMAGE_FOLDER_PREFIX}' contient des images")
+            print(f"    3. Les formats supportés: {config.SUPPORTED_FORMATS}")
             return
         
         # Statistiques
@@ -461,14 +498,26 @@ class VisionPlanteService:
                 image_name = Path(image_path).name
                 filename = Path(image_path).stem
                 
-                # Extraire la classe depuis le nom de fichier
-                # Format: ClassName_1_originalname.jpg
+                # Extraire la classe depuis le nom de fichier (même logique que _get_all_images_by_folder)
                 parts = filename.split('_')
-                class_name = "unknown"
+                class_name = None
+                
+                # Trouver le premier nombre
                 for i, part in enumerate(parts):
-                    if part.isdigit():
+                    if part.isdigit() and i > 0:
                         class_name = '_'.join(parts[:i])
                         break
+                
+                # Si pas trouvé, stratégies alternatives
+                if not class_name:
+                    if '___' in filename:
+                        class_name = filename
+                    elif filename.replace('_', '').replace('-', '').isalnum():
+                        class_name = filename
+                    else:
+                        class_name = "mixed"
+                
+                class_name = class_name.strip().replace(' ', '_')
                 
                 # Créer l'événement
                 event = {
@@ -600,16 +649,25 @@ class VisionPlanteService:
             # Ex: mixed_images/Apple___Apple_scab_1_image.jpg -> results/Apple___Apple_scab/image.json
             filename = Path(image_path).stem
             
-            # Extraire la classe depuis le nom de fichier
+            # Extraire la classe depuis le nom de fichier (même logique cohérente)
             parts = filename.split('_')
-            class_name = "unknown"
+            class_name = None
+            
             for i, part in enumerate(parts):
-                if part.isdigit():
+                if part.isdigit() and i > 0:
                     class_name = '_'.join(parts[:i])
                     break
             
-            if not class_name or class_name == "unknown":
-                class_name = "mixed"
+            # Si pas trouvé, stratégies alternatives
+            if not class_name:
+                if '___' in filename:
+                    class_name = filename
+                elif filename.replace('_', '').replace('-', '').isalnum():
+                    class_name = filename
+                else:
+                    class_name = "mixed"
+            
+            class_name = class_name.strip().replace(' ', '_')
             
             output_path = f"results/{class_name}/{filename}.json"
             
@@ -632,15 +690,30 @@ class VisionPlanteService:
     
     def run(self):
         """Boucle principale du service"""
-        print(f"\n{'='*70}")
-        print(f"🌿 VISIONPLANTE SERVICE - DÉMARRAGE")
-        print(f"{'='*70}")
+        print(f"\n{'='*70}", flush=True)
+        print(f"🌿 VISIONPLANTE SERVICE - DÉMARRAGE", flush=True)
+        print(f"{'='*70}", flush=True)
         
         # Initialisation
+        print(f"\n🔧 Phase 1/4 : Initialisation MinIO...", flush=True)
         self.init_minio()
+        
+        print(f"\n🔧 Phase 2/4 : Initialisation Kafka...", flush=True)
         self.init_kafka()
+        
+        print(f"\n🔧 Phase 3/4 : Chargement du modèle IA...", flush=True)
         self.load_model()
         
+        # Publication automatique des images si activée
+        print(f"\n🔧 Phase 4/4 : Traitement des images...", flush=True)
+        if config.AUTO_PUBLISH_ON_STARTUP:
+            print(f"   📤 Publication automatique activée", flush=True)
+            self.publish_all_images()
+        else:
+            print(f"⚠️  Publication automatique désactivée (AUTO_PUBLISH_ON_STARTUP=False)", flush=True)
+        
+        print(f"\n👂 En attente d'événements sur topic: {self.kafka_image_topic}", flush=True)
+        print(f"{'='*70}\n", flush=True)
         print(f"\n✅ Service initialisé avec succès")
         
         # Publication automatique des images si activée

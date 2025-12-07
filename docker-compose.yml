@@ -149,7 +149,7 @@ services:
       - MODEL_DEVICE=cpu
       - CONFIDENCE_THRESHOLD=0.5
       - BATCH_SIZE=1
-      - IMAGE_FOLDER_PREFIX=color/
+      - IMAGE_FOLDER_PREFIX=mixed_images/
       - AUTO_PUBLISH_ON_STARTUP=True
     depends_on:
       kafka-broker:

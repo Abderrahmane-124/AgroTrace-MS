@@ -1,129 +1,281 @@
-# Prévision du Besoin en Eau
+# MS4 - PrévisionEau (Prévision du Besoin en Eau)
 
-Microservice de prévision du besoin en eau à court terme (1-7 jours) utilisant Prophet pour l'analyse de séries temporelles.
-
----
-
-## 📥 Données en Entrée
-
-**Source** : Table `sensor_data_processed` (TimescaleDB)
-
-**Capteurs utilisés** :
-- Humidité du sol (Soil Moisture) - prioritaire
-- Température ambiante (Environment Temperature)
-- Température du sol (Soil Temperature)
-- Humidité de l'air (Environment Humidity)
-
-**Historique** : 30 derniers jours minimum
+## 📋 Description
+Microservice de prévision du besoin en eau à court terme (1-7 jours) utilisant Prophet (Facebook) pour l'analyse de séries temporelles et la prédiction des conditions agricoles.
 
 ---
 
-## ⚙️ Traitement Interne
+## 📥 ENTRÉES
 
-### 1. Entraînement des Modèles
-- Un modèle Prophet par type de capteur
-- Réentraînement automatique toutes les 6 heures
-- Prévision sur 7 jours avec intervalle de confiance à 95%
+### Source Unique : TimescaleDB
+**Table** : `sensor_data_processed`
 
-### 2. Calcul du Besoin en Eau (Agrégé par Date)
-**Formule pondérée** :
+**Capteurs consommés** :
+- **Soil Moisture** (humidité du sol) - 60% du score
+- **Environment Temperature** (température ambiante) - 25% du score
+- **Soil Temperature** (température du sol) - fallback si env. temp manquante
+- **Environment Humidity** (humidité de l'air) - 15% du score
+
+**Fenêtre historique** : 30 derniers jours (configurable via `TRAINING_WINDOW_DAYS`)
+
+**Requête SQL typique** :
+```sql
+SELECT timestamp as ds, clean_value as y
+FROM sensor_data_processed
+WHERE sensor_type = 'Soil Moisture'
+  AND timestamp >= NOW() - INTERVAL '30 days'
+  AND clean_value > 0.1 AND clean_value <= 100
+ORDER BY timestamp ASC
 ```
-Score = (Humidité_sol × 60%) + (Température × 25%) + (Humidité_air × 15%)
+
+---
+
+## ⚙️ TRAITEMENT
+
+### Pipeline de Prévision
+```
+TimescaleDB → Prophet (ML) → Prévisions 7 jours → Agrégation → Kafka + DB
+```
+
+### Étapes Détaillées
+
+#### 1. **Entraînement Modèles Prophet**
+- **Un modèle par capteur** (Soil Moisture, Temperature, Humidity)
+- **Configuration** :
+  - Saisonnalité journalière (`daily_seasonality=True`)
+  - Saisonnalité hebdomadaire (`weekly_seasonality=True`)
+  - Intervalle de confiance 95% (`interval_width=0.95`)
+  - Sensibilité aux changements : 0.05
+- **Réentraînement** : Automatique toutes les `RETRAINING_INTERVAL_HOURS` (défaut: 24h)
+- **Condition** : Minimum `MIN_DATA_POINTS` (défaut: 50 points)
+
+#### 2. **Génération Prévisions**
+Pour chaque capteur, prévision sur `FORECAST_HORIZON` jours (défaut: 7):
+- `predicted_value` : Valeur centrale (yhat)
+- `lower_bound` : Borne inférieure (yhat_lower)
+- `upper_bound` : Borne supérieure (yhat_upper)
+- `model_confidence` : Basée sur largeur intervalle
+
+**Filtres de validation** :
+- Soil Moisture: 0.1-100%
+- Temperature: -50°C à 60°C
+- Humidity: 0-100%
+- Rejet valeurs aberrantes (< -100 ou > 10000)
+
+#### 3. **Calcul Stress Hydrique**
+Uniquement pour **Soil Moisture**:
+
+```python
+score = soil_moisture / 100.0
+
+# Ajustements contextuels
+if temperature > 30°C:  score *= 0.9
+if temperature > 35°C:  score *= 0.8
+if humidity < 40%:      score *= 0.95
+if humidity < 30%:      score *= 0.85
+```
+
+**Classification** :
+- Score < 0.30 → `HIGH_STRESS` (irrigation obligatoire)
+- Score < 0.50 → `MEDIUM_STRESS` (irrigation recommandée)
+- Score > 0.70 → `OPTIMAL` (pas d'irrigation)
+- Sinon → `LOW_STRESS` (surveillance)
+
+#### 4. **Agrégation Besoin en Eau**
+Combinaison des 3 capteurs par date cible:
+
+```python
+water_need_score = 0
+
+# Contribution humidité sol (60%)
+soil_contribution = (100 - soil_moisture) * 0.6
+water_need_score += soil_contribution
+
+# Contribution température (25%)
+temp_factor = (temperature - 15) / 30  # Normalisation 15-45°C
+temp_contribution = temp_factor * 100 * 0.25
+water_need_score += temp_contribution
+
+# Contribution humidité air (15%)
+humidity_factor = (100 - humidity) / 100
+humidity_contribution = humidity_factor * 100 * 0.15
+water_need_score += humidity_contribution
 ```
 
 **Niveaux de besoin** :
-- `CRITICAL` : Score > 75 → Irrigation urgente
-- `HIGH` : Score 50-75 → Irrigation recommandée
-- `MODERATE` : Score 30-50 → Surveillance
-- `LOW` : Score < 30 → Conditions bonnes
+- Score > 70 → `CRITICAL` (priorité HIGH)
+- Score 50-70 → `HIGH` (priorité MEDIUM)
+- Score 30-50 → `MODERATE` (priorité LOW)
+- Score < 30 → `LOW` (aucune priorité)
 
 **Quantité d'eau recommandée** :
+```python
+water_amount_mm = (water_need_score / 100) * 10  # Maximum 10 mm/jour
 ```
-Eau (mm/jour) = Score / 10
-```
-Exemple : Score de 65 → 6.5 mm/jour d'irrigation
 
 ---
 
-## 📤 Données en Sortie
+## 📤 SORTIES
 
-### Topic Kafka 1 : `water.forecast`
-Prévisions individuelles par capteur (24 messages pour 4 capteurs × 6 jours)
+### 1️⃣ Kafka Topic: `water.forecast`
+**Contenu** : Prévisions individuelles par capteur et par jour
 
-### Topic Kafka 2 : `water.needs`
-Besoins en eau agrégés par date (6 messages pour 6 jours)
-
----
-
-## 📖 Comment Lire les Messages Kafka
-
-### Message `water.needs` - Ligne par Ligne
-
+**Structure** :
 ```json
 {
-  "forecast_date": "2025-12-08T00:00:00",
-  "water_need_score": 23.3,
-  "need_level": "LOW",
-  "irrigation_recommended": false,
-  "irrigation_priority": "NONE",
-  "recommended_water_mm": 2.33,
-  "soil_moisture_percent": 100.0,
-  "temperature_celsius": 42.0,
-  "humidity_percent": 95.0
+  "forecast_date": "2025-12-07T10:30:00",
+  "target_date": "2025-12-08T00:00:00",
+  "sensor_type": "Soil Moisture",
+  "predicted_value": 45.23,
+  "lower_bound": 40.15,
+  "upper_bound": 50.31,
+  "water_stress_level": "MEDIUM_STRESS",
+  "water_stress_score": 0.4523,
+  "irrigation_recommended": true,
+  "horizon_days": 1,
+  "model_confidence": 0.8974
 }
 ```
 
-#### Explication Champ par Champ
+**Volume** : ~21 messages (3 capteurs × 7 jours)
 
-| Champ | Description | Exemple |
-|-------|-------------|---------|
-| `forecast_date` | Date cible de la prévision | `"2025-12-08T00:00:00"` = 8 décembre 2025 |
-| `water_need_score` | Score de besoin en eau sur 100 | `23.3` = Besoin faible (23.3/100) |
-| `need_level` | Niveau de besoin | `"LOW"` = Faible / `"MODERATE"` = Moyen / `"HIGH"` = Élevé / `"CRITICAL"` = Urgent |
-| `irrigation_recommended` | Décision d'irrigation | `false` = Pas d'irrigation / `true` = Irrigation nécessaire |
-| `irrigation_priority` | Priorité d'intervention | `"NONE"` = Pas urgent / `"LOW"` / `"MEDIUM"` / `"HIGH"` / `"CRITICAL"` |
-| `recommended_water_mm` | Quantité d'eau (mm/jour) | `2.33` = 2.33 millimètres d'eau par jour |
-| `soil_moisture_percent` | Humidité du sol prédite | `100.0` = Sol saturé (valeur validée 0-100%) |
-| `temperature_celsius` | Température moyenne prédite | `42.0` = 42°C (valeur validée -50 à 60°C) |
-| `humidity_percent` | Humidité de l'air prédite | `95.0` = 95% (valeur validée 0-100%) |
+### 2️⃣ Kafka Topic: `water.needs`
+**Contenu** : Besoins en eau agrégés par date
 
-#### Exemples de Lecture
-
-**Exemple 1 - Pas d'irrigation nécessaire** :
+**Structure** :
 ```json
 {
-  "forecast_date": "2025-12-08",
-  "water_need_score": 23.3,
-  "need_level": "LOW",
-  "irrigation_recommended": false,
-  "recommended_water_mm": 2.33
-}
-```
-✅ **Lecture** : Le 8 décembre, besoin en eau faible (23.3%), pas d'irrigation nécessaire. Sol suffisamment humide.
-
-**Exemple 2 - Irrigation recommandée** :
-```json
-{
-  "forecast_date": "2025-12-10",
+  "forecast_date": "2025-12-07T10:30:00",
+  "target_date": "2025-12-08",
   "water_need_score": 68.5,
   "need_level": "HIGH",
   "irrigation_recommended": true,
-  "irrigation_priority": "HIGH",
-  "recommended_water_mm": 6.85
+  "irrigation_priority": "MEDIUM",
+  "recommended_water_mm": 6.85,
+  "soil_moisture_percent": 42.0,
+  "temperature_celsius": 32.5,
+  "humidity_percent": 55.0,
+  "horizon_days": 1
 }
 ```
-⚠️ **Lecture** : Le 10 décembre, besoin élevé (68.5%), irrigation recommandée avec priorité haute. Appliquer ~7 mm d'eau.
 
-**Exemple 3 - Irrigation urgente** :
+**Volume** : 7 messages (1 par jour)
+
+### 3️⃣ TimescaleDB: Table `water_forecast`
+**Persistance** : Toutes les prévisions individuelles sauvegardées
+
+**Schéma** :
+- `forecast_date` : Date de génération
+- `target_date` : Date cible prévue
+- `sensor_type` : Type de capteur
+- `predicted_value`, `lower_bound`, `upper_bound`
+- `water_stress_level`, `water_stress_score`
+- `irrigation_recommended`, `horizon_days`, `model_confidence`
+
+**Index** : Sur `target_date`, `sensor_type`, `stress_level`
+
+---
+
+## 📊 Guide de Lecture des Messages
+
+### Message `water.needs` - Interprétation
+
+| Champ | Description | Valeurs |
+|-------|-------------|---------|
+| `water_need_score` | Score global 0-100 | Plus élevé = plus de besoin |
+| `need_level` | Niveau critique | LOW / MODERATE / HIGH / CRITICAL |
+| `irrigation_recommended` | Décision binaire | true = irriguer, false = attendre |
+| `irrigation_priority` | Urgence | NONE / LOW / MEDIUM / HIGH |
+| `recommended_water_mm` | Quantité d'eau | En millimètres par jour |
+| `soil_moisture_percent` | Humidité sol prévue | 0-100% |
+| `temperature_celsius` | Température prévue | -50 à 60°C |
+| `humidity_percent` | Humidité air prévue | 0-100% |
+| `horizon_days` | Jours dans le futur | 1 à 7 |
+
+### Exemples de Scénarios
+
+**Scénario 1 - Conditions Optimales** :
 ```json
 {
-  "forecast_date": "2025-12-12",
-  "water_need_score": 82.0,
-  "need_level": "CRITICAL",
-  "irrigation_recommended": true,
-  "irrigation_priority": "CRITICAL",
-  "recommended_water_mm": 8.2,
-  "soil_moisture_percent": 15.0
+  "water_need_score": 18.5,
+  "need_level": "LOW",
+  "irrigation_recommended": false,
+  "soil_moisture_percent": 85.0,
+  "temperature_celsius": 22.0
 }
 ```
-🚨 **Lecture** : Le 12 décembre, besoin critique (82%), sol très sec (15% humidité). Irrigation urgente de 8.2 mm/jour requise.
+✅ Sol humide (85%), température modérée → Pas d'irrigation
+
+**Scénario 2 - Irrigation Recommandée** :
+```json
+{
+  "water_need_score": 62.0,
+  "need_level": "HIGH",
+  "irrigation_recommended": true,
+  "irrigation_priority": "MEDIUM",
+  "recommended_water_mm": 6.2,
+  "soil_moisture_percent": 35.0,
+  "temperature_celsius": 33.0
+}
+```
+⚠️ Sol sec (35%), chaleur (33°C) → Irrigation 6.2 mm
+
+**Scénario 3 - Alerte Critique** :
+```json
+{
+  "water_need_score": 85.0,
+  "need_level": "CRITICAL",
+  "irrigation_recommended": true,
+  "irrigation_priority": "HIGH",
+  "recommended_water_mm": 8.5,
+  "soil_moisture_percent": 12.0,
+  "temperature_celsius": 38.0,
+  "humidity_percent": 25.0
+}
+```
+🚨 Sol très sec (12%), canicule (38°C), air sec (25%) → Irrigation urgente 8.5 mm
+
+---
+
+## 🔧 Configuration
+
+| Variable | Défaut | Description |
+|----------|--------|-------------|
+| `FORECAST_HORIZON` | 7 | Jours de prévision |
+| `TRAINING_WINDOW_DAYS` | 30 | Historique pour entraînement |
+| `RETRAINING_INTERVAL_HOURS` | 24 | Fréquence réentraînement |
+| `PUBLISH_INTERVAL_MINUTES` | 60 | Fréquence génération prévisions |
+| `MIN_DATA_POINTS` | 50 | Minimum de points pour entraîner |
+| `WATER_STRESS_THRESHOLD_LOW` | 30 | Seuil stress élevé (%) |
+| `WATER_STRESS_THRESHOLD_MEDIUM` | 50 | Seuil stress moyen (%) |
+| `WATER_STRESS_THRESHOLD_HIGH` | 70 | Seuil optimal (%) |
+| `WEIGHT_SOIL_MOISTURE` | 0.6 | Poids humidité sol (60%) |
+| `WEIGHT_TEMPERATURE` | 0.25 | Poids température (25%) |
+| `WEIGHT_HUMIDITY` | 0.15 | Poids humidité air (15%) |
+
+---
+
+## 🔄 Cycle de Fonctionnement
+
+```
+Toutes les 60 minutes (configurable):
+1. Vérifier si réentraînement nécessaire (>24h depuis dernier)
+2. Si oui: récupérer 30 jours de données depuis TimescaleDB
+3. Entraîner modèles Prophet (Soil/Temp/Humidity)
+4. Générer prévisions 7 jours avec intervalles confiance
+5. Calculer stress hydrique pour Soil Moisture
+6. Agréger besoins en eau par date (combinaison 3 capteurs)
+7. Sauvegarder dans TimescaleDB (table water_forecast)
+8. Publier dans Kafka (water.forecast + water.needs)
+9. Afficher statistiques (modèles, prévisions, erreurs)
+```
+
+---
+
+## 🛠️ Dépendances
+
+- `prophet` : Modèle de prévision Facebook (Prophet)
+- `pandas` : Manipulation DataFrames
+- `numpy` : Calculs numériques
+- `psycopg2` : Client PostgreSQL/TimescaleDB
+- `kafka-python` : Producer Kafka
