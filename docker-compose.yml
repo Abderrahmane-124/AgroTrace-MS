@@ -158,14 +158,6 @@ services:
         condition: service_healthy
     networks:
       - agrotrace-network
-    # Décommenter pour activer le GPU (nécessite NVIDIA Docker)
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
 
   prevision-eau:
     build: ./4-PrévisionEau
@@ -197,10 +189,79 @@ services:
     networks:
       - agrotrace-network
 
+  regles-agro:
+    build: ./5-RèglesAgro
+    container_name: regles-agro
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka-broker:9092
+      - KAFKA_TOPIC_WATER_FORECAST=water.forecast
+      - KAFKA_TOPIC_DISEASE_DETECTED=disease.detected
+      - KAFKA_TOPIC_SENSOR_DATA=sensor-data-processed
+      - KAFKA_TOPIC_RECOMMENDATIONS=agro.recommendations
+      - KAFKA_GROUP_ID=regles-agro-group
+      - LOG_LEVEL=INFO
+    depends_on:
+      kafka-broker:
+        condition: service_healthy
+      prevision-eau:
+        condition: service_started
+      vision-plante:
+        condition: service_started
+    networks:
+      - agrotrace-network
+
+  postgres-irrigation:
+    image: postgres:16-alpine
+    container_name: postgres-irrigation
+    ports:
+      - "5434:5432"
+    environment:
+      - POSTGRES_DB=irrigation
+      - POSTGRES_USER=irrigation_user
+      - POSTGRES_PASSWORD=irrigation_pass
+    volumes:
+      - postgres_irrigation_data:/var/lib/postgresql/data
+      - ./6-RecoIrrigation/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    networks:
+      - agrotrace-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U irrigation_user -d irrigation"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  reco-irrigation:
+    build: ./6-RecoIrrigation
+    container_name: reco-irrigation
+    ports:
+      - "8086:8086"
+    environment:
+      - API_HOST=0.0.0.0
+      - API_PORT=8086
+      - KAFKA_BOOTSTRAP_SERVERS=kafka-broker:9092
+      - KAFKA_TOPIC_RECOMMENDATIONS=agro.recommendations
+      - KAFKA_GROUP_ID=reco-irrigation-group
+      - POSTGRES_HOST=postgres-irrigation
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=irrigation
+      - POSTGRES_USER=irrigation_user
+      - POSTGRES_PASSWORD=irrigation_pass
+      - LOG_LEVEL=INFO
+    depends_on:
+      kafka-broker:
+        condition: service_healthy
+      postgres-irrigation:
+        condition: service_healthy
+      regles-agro:
+        condition: service_started
+    networks:
+      - agrotrace-network
+
 volumes:
   kafka_data:
   timescaledb_data:
   minio_data:
+  postgres_irrigation_data:
 
 networks:
   agrotrace-network:

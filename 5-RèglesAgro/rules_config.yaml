@@ -1,0 +1,304 @@
+# ========================================
+# Configuration des règles agronomiques
+# ========================================
+
+irrigation_rules:
+  - name: "Irrigation Urgente - Stress Critique"
+    priority: "URGENT"
+    conditions:
+      all:
+        - field: "soil_moisture"
+          operator: "lt"
+          value: 15.0
+        - field: "temperature"
+          operator: "gt"
+          value: 35.0
+    action:
+      type: "IRRIGATION"
+      action_code: "IRRIGATE_NOW"
+      template: "Stress hydrique CRITIQUE: {soil_moisture:.1f}% humidité, {temperature:.1f}°C. IRRIGATION IMMÉDIATE requise. Apport recommandé: 15-20 L/m²."
+      quantity: 17.5
+      unit: "L/m²"
+
+  - name: "Irrigation Haute Priorité - Sol Sec"
+    priority: "HIGH"
+    conditions:
+      all:
+        - field: "soil_moisture"
+          operator: "gte"
+          value: 15.0
+        - field: "soil_moisture"
+          operator: "lt"
+          value: 25.0
+        - field: "temperature"
+          operator: "gt"
+          value: 30.0
+    action:
+      type: "IRRIGATION"
+      action_code: "IRRIGATE_TODAY"
+      template: "Sol sec détecté: {soil_moisture:.1f}% humidité, {temperature:.1f}°C. Irrigation dans les 24h. Apport: 10-12 L/m²."
+      quantity: 11.0
+      unit: "L/m²"
+
+  - name: "Irrigation Préventive"
+    priority: "MEDIUM"
+    conditions:
+      all:
+        - field: "soil_moisture"
+          operator: "gte"
+          value: 25.0
+        - field: "soil_moisture"
+          operator: "lt"
+          value: 40.0
+        - field: "forecasted_needs"
+          operator: "gt"
+          value: 3.0
+    action:
+      type: "IRRIGATION"
+      action_code: "SCHEDULE_IRRIGATION_48H"
+      template: "Irrigation préventive: humidité {soil_moisture:.1f}%, besoins prévus {forecasted_needs:.1f}L/m². Planifier dans 48h."
+      quantity: 8.0
+      unit: "L/m²"
+
+  - name: "Irrigation Non Nécessaire"
+    priority: "LOW"
+    conditions:
+      all:
+        - field: "soil_moisture"
+          operator: "gte"
+          value: 60.0
+    action:
+      type: "IRRIGATION"
+      action_code: "NO_IRRIGATION_NEEDED"
+      template: "Sol suffisamment humide ({soil_moisture:.1f}%). Aucune irrigation nécessaire. Surveiller drainage si > 80%."
+      quantity: 0
+      unit: "L/m²"
+
+disease_rules:
+  - name: "Mildiou - Traitement Urgent"
+    priority: "URGENT"
+    conditions:
+      all:
+        - field: "disease_name"
+          operator: "contains"
+          value: "Late_Blight"
+        - field: "confidence"
+          operator: "gt"
+          value: 0.70
+    action:
+      type: "DISEASE_TREATMENT"
+      action_code: "APPLY_FUNGICIDE_COPPER"
+      template: "Mildiou détecté ({confidence:.0%} confiance). URGENT: 1) Bouillie bordelaise 20g/L 2) Éliminer feuilles infectées 3) Améliorer aération 4) Retraitement 7-10 jours"
+      product: "Bouillie bordelaise (Cuivre)"
+      dosage: "20 g/L"
+      application_method: "Pulvérisation foliaire"
+
+  - name: "Septoriose - Traitement Préventif"
+    priority: "HIGH"
+    conditions:
+      all:
+        - field: "disease_name"
+          operator: "contains"
+          value: "Septoria"
+        - field: "confidence"
+          operator: "gt"
+          value: 0.65
+    action:
+      type: "DISEASE_TREATMENT"
+      action_code: "APPLY_FUNGICIDE_PREVENTIVE"
+      template: "Septoriose détectée ({confidence:.0%}). 1) Mancozèbe/Chlorothalonil 2g/L 2) Retirer feuilles basses 3) Éviter irrigation aspersion 4) Rotation cultures"
+      product: "Mancozèbe"
+      dosage: "2 g/L"
+      application_method: "Traitement foliaire préventif"
+
+  - name: "Helminthosporiose Maïs - Action Rapide"
+    priority: "HIGH"
+    conditions:
+      all:
+        - field: "disease_name"
+          operator: "contains"
+          value: "Northern_Leaf_Blight"
+        - field: "confidence"
+          operator: "gt"
+          value: 0.75
+    action:
+      type: "DISEASE_TREATMENT"
+      action_code: "APPLY_FUNGICIDE_CORN"
+      template: "Helminthosporiose maïs ({confidence:.0%}). 1) Triazole dès détection 2) Surveiller propagation 3) Variétés résistantes prochaine saison 4) Destruction résidus"
+      product: "Triazole (Propiconazole)"
+      dosage: "0.5 L/ha"
+      application_method: "Pulvérisation étages foliaires supérieurs"
+
+  - name: "Maladie Bactérienne - Isolement"
+    priority: "URGENT"
+    conditions:
+      all:
+        - field: "disease_name"
+          operator: "contains"
+          value: "Bacterial"
+        - field: "confidence"
+          operator: "gt"
+          value: 0.60
+    action:
+      type: "DISEASE_TREATMENT"
+      action_code: "ISOLATE_AND_TREAT_BACTERIAL"
+      template: "Maladie bactérienne ({confidence:.0%}). 1) ISOLER plants infectés 2) Cuivre (doses réglementaires) 3) Désinfection outils 4) Arrachage si > 30% atteint"
+      product: "Cuivre + Kasugamycine"
+      dosage: "Selon fabricant"
+      application_method: "Traitement préventif avant pluies"
+
+  - name: "Moisissure - Gestion Environnementale"
+    priority: "MEDIUM"
+    conditions:
+      all:
+        - field: "disease_name"
+          operator: "contains"
+          value: "Mold"
+        - field: "confidence"
+          operator: "gt"
+          value: 0.55
+    action:
+      type: "DISEASE_TREATMENT"
+      action_code: "IMPROVE_VENTILATION"
+      template: "Moisissure détectée ({confidence:.0%}). 1) Améliorer ventilation 2) Réduire humidité 3) Bacillus subtilis 10mL/L 4) Retirer fruits touchés"
+      product: "Bacillus subtilis (biologique)"
+      dosage: "10 mL/L"
+      application_method: "Pulvérisation + aération"
+
+  - name: "Confiance Faible - Surveillance"
+    priority: "LOW"
+    conditions:
+      all:
+        - field: "confidence"
+          operator: "gte"
+          value: 0.40
+        - field: "confidence"
+          operator: "lt"
+          value: 0.60
+    action:
+      type: "DISEASE_TREATMENT"
+      action_code: "MONITOR_CLOSELY"
+      template: "Maladie possible '{disease_name}' ({confidence:.0%} - incertaine). SURVEILLANCE: inspection hebdomadaire, nouvelles photos si évolution, traitement si progression"
+      product: null
+      dosage: null
+      application_method: "Surveillance rapprochée"
+
+soil_rules:
+  - name: "pH Trop Acide - Chaulage"
+    priority: "HIGH"
+    conditions:
+      all:
+        - field: "ph"
+          operator: "lt"
+          value: 5.5
+    action:
+      type: "SOIL_ADJUSTMENT"
+      action_code: "APPLY_LIME"
+      template: "Sol très acide (pH {ph:.2f}). 1) Chaux agricole 200-400 kg/ha 2) Incorporation 10-15cm 3) Attendre 2-3 semaines avant plantation 4) Réévaluer pH"
+      product: "Chaux agricole (CaCO3)"
+      dosage: "300 kg/ha"
+      application_method: "Incorporation superficielle"
+
+  - name: "pH Trop Alcalin - Acidification"
+    priority: "MEDIUM"
+    conditions:
+      all:
+        - field: "ph"
+          operator: "gt"
+          value: 7.5
+    action:
+      type: "SOIL_ADJUSTMENT"
+      action_code: "APPLY_SULFUR"
+      template: "Sol alcalin (pH {ph:.2f}). 1) Soufre élémentaire 100-200 kg/ha 2) Ou sulfate aluminium (action rapide) 3) Effet progressif 2-3 mois 4) Contrôle régulier"
+      product: "Soufre élémentaire"
+      dosage: "150 kg/ha"
+      application_method: "Incorporation au sol"
+
+  - name: "Carence Azote - Fertilisation N"
+    priority: "HIGH"
+    conditions:
+      all:
+        - field: "nitrogen"
+          operator: "lt"
+          value: 20.0
+    action:
+      type: "FERTILIZATION"
+      action_code: "APPLY_NITROGEN"
+      template: "Carence azote ({nitrogen:.1f} ppm - norme: 20-50). 1) Urée 46% N: 100-150 kg/ha 2) En 2-3 fois 3) Incorporation + irrigation légère 4) Éviter sol sec"
+      product: "Urée 46% N"
+      dosage: "125 kg/ha"
+      application_method: "Fractionnement en 2-3 apports"
+
+  - name: "Carence Phosphore - Fertilisation P"
+    priority: "MEDIUM"
+    conditions:
+      all:
+        - field: "phosphorus"
+          operator: "lt"
+          value: 10.0
+    action:
+      type: "FERTILIZATION"
+      action_code: "APPLY_PHOSPHORUS"
+      template: "Carence phosphore ({phosphorus:.1f} ppm - norme: 10-30). 1) Superphosphate 18% P2O5: 150-200 kg/ha 2) En pré-plantation 3) Incorporation horizon racinaire"
+      product: "Superphosphate simple 18%"
+      dosage: "175 kg/ha"
+      application_method: "Pré-plantation, incorporation profonde"
+
+  - name: "Carence Potassium - Fertilisation K"
+    priority: "MEDIUM"
+    conditions:
+      all:
+        - field: "potassium"
+          operator: "lt"
+          value: 80.0
+    action:
+      type: "FERTILIZATION"
+      action_code: "APPLY_POTASSIUM"
+      template: "Carence potassium ({potassium:.1f} ppm - norme: 80-200). 1) Chlorure potassium 60% K2O: 100-150 kg/ha 2) Fractionner si > 150 kg/ha 3) Éviter contact racines"
+      product: "Chlorure de potassium 60%"
+      dosage: "125 kg/ha"
+      application_method: "Fractionnement, éviter contact direct racines"
+
+  - name: "Sol Sec + Carence Azote - Double Action"
+    priority: "URGENT"
+    conditions:
+      all:
+        - field: "soil_moisture"
+          operator: "lt"
+          value: 20.0
+        - field: "nitrogen"
+          operator: "lt"
+          value: 25.0
+    action:
+      type: "IRRIGATION"
+      action_code: "IRRIGATE_BEFORE_FERTILIZATION"
+      template: "Sol sec ({soil_moisture:.1f}%) + carence N ({nitrogen:.1f}ppm). SÉQUENCE: 1) IRRIGATION D'ABORD (> 40%) 2) Attendre 24h 3) Fertilisation azotée 4) Nouvelle irrigation. RISQUE brûlure si engrais sur sol sec"
+      quantity: 15.0
+      unit: "L/m²"
+
+  - name: "Conditions Optimales - Maintien"
+    priority: "LOW"
+    conditions:
+      all:
+        - field: "ph"
+          operator: "gte"
+          value: 6.0
+        - field: "ph"
+          operator: "lte"
+          value: 7.0
+        - field: "soil_moisture"
+          operator: "gte"
+          value: 40.0
+        - field: "soil_moisture"
+          operator: "lte"
+          value: 70.0
+        - field: "nitrogen"
+          operator: "gte"
+          value: 30.0
+    action:
+      type: "SOIL_ADJUSTMENT"
+      action_code: "MAINTAIN_CONDITIONS"
+      template: "Conditions OPTIMALES: pH {ph:.2f}, humidité {soil_moisture:.1f}%, N {nitrogen:.1f}ppm. Plan maintien: surveillance mensuelle, amendement organique 1x/an, rotation cultures"
+      product: null
+      dosage: null
+      application_method: "Maintien préventif"
