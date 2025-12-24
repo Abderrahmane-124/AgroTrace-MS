@@ -120,6 +120,30 @@ normalized_data = {
 }
 ```
 
+#### **Normalisation des Plot ID (Compatibilité MS6)**
+Les données capteurs peuvent utiliser différents formats d'identifiants. MS5 normalise automatiquement vers le format MS6 :
+
+| Format d'entrée | → Format MS6 |
+|-----------------|--------------|
+| `1`, `2`, `3` | `PLOT-001`, `PLOT-002`, `PLOT-003` |
+| `plot_1`, `plot-1` | `PLOT-001` |
+| `PLOT-001` | `PLOT-001` (inchangé) |
+
+**Code concerné :**
+```python
+# kafka_service.py - PLOT_ID_MAPPING
+PLOT_ID_MAPPING = {
+    '1': 'PLOT-001', '2': 'PLOT-002', '3': 'PLOT-003',
+    'plot_1': 'PLOT-001', 'plot_2': 'PLOT-002', ...
+}
+
+def _normalize_plot_id(self, plot_id) -> str:
+    # Conversion vers format MS6
+    return PLOT_ID_MAPPING.get(str(plot_id), 'PLOT-001')
+```
+
+Cela garantit que les recommandations d'**irrigation** générées par MS5 utilisent des `plot_id` compatibles avec les zones configurées dans MS6.
+
 ---
 
 #### **ÉTAPE 3 : Chargement des Règles YAML** (`rules_engine.py`)

@@ -132,21 +132,47 @@ async def get_irrigation_plan(
         if not zone.active:
             raise HTTPException(status_code=400, detail=f"Zone {zone_id} désactivée")
         
-        # 2. Récupérer la dernière recommandation MS5
+        # 2. Récupérer la dernière recommandation MS5 ou utiliser un fallback
         recommendation = get_latest_irrigation_recommendation(zone.plot_id)
         
         if not recommendation:
-            raise HTTPException(
-                status_code=404, 
-                detail=f"Aucune recommandation d'irrigation disponible pour la parcelle {zone.plot_id}"
-            )
-        
-        logger.info(f"Recommandation trouvée pour {zone.plot_id}: {recommendation.get('action')} (priorité: {recommendation.get('priority')})")
+            # Fallback: créer une recommandation par défaut basée sur l'humidité actuelle
+            current_moisture = float(zone.soil_moisture_current) if zone.soil_moisture_current else 50.0
+            
+            if current_moisture < 30:
+                priority = "HIGH"
+                action = "IRRIGATE_TODAY"
+                quantity = 12.0
+            elif current_moisture < 45:
+                priority = "MEDIUM"
+                action = "SCHEDULE_IRRIGATION_48H"
+                quantity = 8.0
+            else:
+                priority = "LOW"
+                action = "PREVENTIVE_IRRIGATION"
+                quantity = 5.0
+            
+            recommendation = {
+                "plot_id": zone.plot_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "type": "IRRIGATION",
+                "priority": priority,
+                "action": action,
+                "quantity": quantity,
+                "unit": "L/m²",
+                "soil_moisture": current_moisture,
+                "source": "MS6-fallback",
+                "details": f"Plan généré automatiquement (humidité actuelle: {current_moisture:.1f}%)"
+            }
+            logger.info(f"Utilisation recommandation fallback pour {zone.plot_id} (humidité: {current_moisture}%)")
+        else:
+            logger.info(f"Recommandation MS5 trouvée pour {zone.plot_id}: {recommendation.get('action')} (priorité: {recommendation.get('priority')})")
         
         # 3. Créer l'objet ZoneConfiguration pour le planner
         zone_config = ZoneConfiguration(
             zone_id=zone.zone_id,
             plot_id=zone.plot_id,
+            name=zone.name or f"Zone {zone.zone_id}",
             area_hectares=float(zone.area_hectares),
             soil_type=zone.soil_type,
             crop_type=zone.crop_type,
@@ -159,30 +185,46 @@ async def get_irrigation_plan(
             soil_moisture_current=float(zone.soil_moisture_current) if zone.soil_moisture_current else None
         )
         
-        # 4. Générer le plan d'irrigation
-        plan = planner.create_irrigation_plan(
+        # 4. Convertir le dict recommendation en RecommendationInput
+        from models import RecommendationInput
+        rec_input = RecommendationInput(
+            plot_id=recommendation.get('plot_id', zone.plot_id),
+            timestamp=datetime.fromisoformat(recommendation['timestamp']) if isinstance(recommendation.get('timestamp'), str) else recommendation.get('timestamp', datetime.utcnow()),
+            type=recommendation.get('type', 'IRRIGATION'),
+            priority=recommendation.get('priority', 'MEDIUM'),
+            action=recommendation.get('action', 'IRRIGATE'),
+            details=recommendation.get('details', 'Plan auto-généré'),
+            source=recommendation.get('source', 'MS6-fallback'),
+            quantity=recommendation.get('quantity'),
+            unit=recommendation.get('unit'),
+            soil_moisture=recommendation.get('soil_moisture'),
+            temperature=recommendation.get('temperature')
+        )
+        
+        # 5. Générer le plan d'irrigation
+        plan = planner.create_plan(
             zone_config=zone_config,
-            recommendation=recommendation,
+            recommendation=rec_input,
             days_ahead=days_ahead
         )
         
-        # 5. Sauvegarder le plan en base de données
-        plan_db = IrrigationPlanDB(
-            zone_id=zone_id,
-            plot_id=zone.plot_id,
-            valid_until=datetime.utcnow() + timedelta(days=days_ahead),
-            soil_type=zone.soil_type,
-            crop_type=zone.crop_type,
-            growth_stage=zone.growth_stage,
-            irrigation_type=zone.irrigation_type,
-            total_volume_liters=float(plan.total_volume_liters),
-            estimated_cost_eur=float(plan.estimated_cost_eur),
-            water_source=zone.water_source,
-            recommendation_source=f"MS5-{recommendation.get('source', 'unknown')}",
-            notes=f"Priority: {recommendation.get('priority')} | Action: {recommendation.get('action')}"
-        )
+        # 6. Sauvegarder le plan en base de données (passer un dict, pas un objet SQLAlchemy)
+        plan_data = {
+            "zone_id": zone_id,
+            "plot_id": zone.plot_id,
+            "valid_until": datetime.utcnow() + timedelta(days=days_ahead),
+            "soil_type": zone.soil_type,
+            "crop_type": zone.crop_type,
+            "growth_stage": zone.growth_stage,
+            "irrigation_type": zone.irrigation_type,
+            "total_volume_liters": float(plan.total_volume_liters),
+            "estimated_cost_eur": float(plan.estimated_cost_eur),
+            "water_source": zone.water_source,
+            "recommendation_source": f"MS5-{recommendation.get('source', 'unknown')}",
+            "notes": f"Priority: {recommendation.get('priority')} | Action: {recommendation.get('action')}"
+        }
         
-        plan_db = db.create_plan(plan_db.__dict__)
+        plan_db = db.create_plan(plan_data)
         plan_id = plan_db.plan_id
         
         logger.info(f"Plan {plan_id} créé pour zone {zone_id}: {len(plan.sessions)} sessions, {plan.total_volume_liters}L")
@@ -193,8 +235,8 @@ async def get_irrigation_plan(
             sessions_data.append({
                 "plan_id": plan_id,
                 "zone_id": zone_id,
-                "scheduled_date": session.date,
-                "scheduled_time": session.time,
+                "scheduled_date": session.session_date,
+                "scheduled_time": session.session_time,
                 "duration_minutes": session.duration_minutes,
                 "planned_volume_liters": float(session.volume_liters),
                 "flow_rate_lpm": float(zone.flow_rate_lpm),

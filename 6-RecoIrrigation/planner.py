@@ -244,8 +244,8 @@ class IrrigationPlanner:
                 )
                 
                 sessions.append(IrrigationSession(
-                    date=session_date,
-                    time=session_time,
+                    session_date=session_date,
+                    session_time=session_time,
                     duration_minutes=duration,
                     volume_liters=volume_per_session,
                     flow_rate_lpm=flow_rate,
@@ -265,8 +265,8 @@ class IrrigationPlanner:
                 )
                 
                 sessions.append(IrrigationSession(
-                    date=session_date,
-                    time=session_time,
+                    session_date=session_date,
+                    session_time=session_time,
                     duration_minutes=duration,
                     volume_liters=volume_per_session,
                     flow_rate_lpm=flow_rate,
@@ -288,8 +288,8 @@ class IrrigationPlanner:
                 )
                 
                 sessions.append(IrrigationSession(
-                    date=session_date,
-                    time=session_time,
+                    session_date=session_date,
+                    session_time=session_time,
                     duration_minutes=duration,
                     volume_liters=volume_per_session,
                     flow_rate_lpm=flow_rate,
@@ -298,7 +298,7 @@ class IrrigationPlanner:
                 ))
         
         logger.info(f"Créé {len(sessions)} sessions: "
-                   f"{[f'{s.date} {s.time}' for s in sessions]}")
+                   f"{[f'{s.session_date} {s.session_time}' for s in sessions]}")
         
         return sessions
     

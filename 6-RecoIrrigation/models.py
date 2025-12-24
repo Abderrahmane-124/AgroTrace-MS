@@ -43,8 +43,8 @@ class SessionStatus(str, Enum):
 
 class IrrigationSession(BaseModel):
     """Session d'irrigation individuelle"""
-    date: date = Field(..., description="Date de la session")
-    time: time = Field(..., description="Heure de début")
+    session_date: date = Field(..., description="Date de la session")
+    session_time: time = Field(..., description="Heure de début")
     duration_minutes: int = Field(..., ge=5, le=180, description="Durée en minutes")
     volume_liters: float = Field(..., ge=0, description="Volume d'eau en litres")
     flow_rate_lpm: float = Field(..., gt=0, description="Débit en L/min")

@@ -6,7 +6,7 @@ import logging
 from kafka import KafkaConsumer
 from kafka.errors import KafkaError
 from threading import Thread
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from datetime import datetime
 from collections import deque
 from models import RecommendationInput
@@ -182,3 +182,32 @@ class KafkaRecommendationConsumer:
 
 # Instance globale
 kafka_consumer = KafkaRecommendationConsumer()
+
+
+def get_latest_irrigation_recommendation(plot_id: str) -> Optional[Dict]:
+    """
+    Fonction helper pour récupérer la dernière recommandation d'irrigation.
+    Wrapper autour de la méthode de l'instance kafka_consumer.
+    
+    Args:
+        plot_id: ID de la parcelle
+    
+    Returns:
+        Dictionnaire de la recommandation ou None
+    """
+    recommendation = kafka_consumer.get_latest_irrigation_recommendation(plot_id)
+    if recommendation:
+        return {
+            "plot_id": recommendation.plot_id,
+            "timestamp": recommendation.timestamp.isoformat(),
+            "type": recommendation.type,
+            "priority": recommendation.priority,
+            "action": recommendation.action,
+            "details": recommendation.details,
+            "source": recommendation.source,
+            "quantity": recommendation.quantity,
+            "unit": recommendation.unit,
+            "soil_moisture": recommendation.soil_moisture,
+            "temperature": recommendation.temperature
+        }
+    return None

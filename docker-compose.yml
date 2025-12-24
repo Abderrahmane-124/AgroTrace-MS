@@ -27,7 +27,7 @@ services:
   kafka-dashboard:
     image: provectuslabs/kafka-ui:latest
     ports:
-      - "8080:8080"
+      - "8081:8080"
     environment:
       - KAFKA_CLUSTERS_0_NAME=agrotrace-kafka
       - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka-broker:9092
@@ -257,11 +257,66 @@ services:
     networks:
       - agrotrace-network
 
+  # ==================== MS7: DASHBOARD SIG ====================
+  
+  # PostGIS Database for spatial data
+  postgis:
+    image: postgis/postgis:16-3.4-alpine
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_DB=agrotrace_sig
+      - POSTGRES_USER=agrotrace_user
+      - POSTGRES_PASSWORD=agrotrace_pass
+    volumes:
+      - postgis_data:/var/lib/postgresql/data
+    networks:
+      - agrotrace-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agrotrace_user -d agrotrace_sig"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Dashboard Backend API (FastAPI)
+  dashboard-backend:
+    build: ./7-DashboardSIG/backend
+    ports:
+      - "8085:8085"
+    environment:
+      - POSTGIS_HOST=postgis
+      - POSTGIS_PORT=5432
+      - POSTGIS_DB=agrotrace_sig
+      - POSTGIS_USER=agrotrace_user
+      - POSTGIS_PASSWORD=agrotrace_pass
+      - KAFKA_BOOTSTRAP_SERVERS=kafka-broker:9092
+      - KAFKA_GROUP_ID=dashboard-sig-group
+      - API_HOST=0.0.0.0
+      - API_PORT=8085
+    depends_on:
+      kafka-broker:
+        condition: service_healthy
+      postgis:
+        condition: service_healthy
+    networks:
+      - agrotrace-network
+
+  # Dashboard Frontend (React + Leaflet)
+  dashboard-frontend:
+    build: ./7-DashboardSIG/frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - dashboard-backend
+    networks:
+      - agrotrace-network
+
 volumes:
   kafka_data:
   timescaledb_data:
   minio_data:
   postgres_irrigation_data:
+  postgis_data:
 
 networks:
   agrotrace-network:

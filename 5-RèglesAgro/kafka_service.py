@@ -3,6 +3,7 @@ Service Kafka pour consommer les événements et appliquer les règles
 """
 import json
 import logging
+import os
 from kafka import KafkaConsumer, KafkaProducer
 from kafka.errors import KafkaError
 from typing import Dict, List
@@ -18,9 +19,83 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
+# Mapping des plot_id vers les zones MS6
+# Les capteurs envoient des IDs numériques, MS6 attend PLOT-001, PLOT-002, PLOT-003
+PLOT_ID_MAPPING = {
+    # IDs numériques
+    '1': 'PLOT-001',
+    '2': 'PLOT-002', 
+    '3': 'PLOT-003',
+    '4': 'PLOT-001',  # cycle sur les zones
+    '5': 'PLOT-002',
+    # IDs avec préfixe
+    'plot_1': 'PLOT-001',
+    'plot_2': 'PLOT-002',
+    'plot_3': 'PLOT-003',
+    'plot-1': 'PLOT-001',
+    'plot-2': 'PLOT-002',
+    'plot-3': 'PLOT-003',
+    # Zones MS6 directes
+    'PLOT-001': 'PLOT-001',
+    'PLOT-002': 'PLOT-002',
+    'PLOT-003': 'PLOT-003',
+}
+
+
 
 class KafkaService:
     """Service de traitement des événements Kafka"""
+    
+    def _extract_crop_from_class(self, class_name: str) -> str:
+        """
+        Extrait le type de culture depuis le nom de classe de maladie.
+        Ex: 'Apple___Apple_scab' -> 'Apple'
+            'Tomato___Late_blight' -> 'Tomato'
+        """
+        if not class_name:
+            return 'unknown'
+        
+        # Format standard: Plante___Maladie
+        if '___' in class_name:
+            return class_name.split('___')[0]
+        
+        # Format alternatif: Plante_Maladie
+        parts = class_name.split('_')
+        if parts:
+            return parts[0]
+        
+        return class_name
+    
+    def _normalize_plot_id(self, plot_id) -> str:
+        """
+        Normalise un plot_id vers le format MS6 (PLOT-001, PLOT-002, PLOT-003).
+        Permet la compatibilité entre les données capteurs et les zones d'irrigation.
+        """
+        if not plot_id:
+            # Fallback vers PLOT-001 si pas de plot_id
+            return 'PLOT-001'
+        
+        plot_id_str = str(plot_id).strip()
+        
+        # Vérifier le mapping direct
+        if plot_id_str in PLOT_ID_MAPPING:
+            return PLOT_ID_MAPPING[plot_id_str]
+        
+        # Essayer en minuscule
+        if plot_id_str.lower() in PLOT_ID_MAPPING:
+            return PLOT_ID_MAPPING[plot_id_str.lower()]
+        
+        # Si c'est un nombre, mapper cycliquement
+        try:
+            num = int(plot_id_str)
+            zone_num = ((num - 1) % 3) + 1  # 1, 2, 3 cyclique
+            return f'PLOT-00{zone_num}'
+        except ValueError:
+            pass
+        
+        # Fallback: retourner PLOT-001
+        logger.warning(f"Plot ID inconnu '{plot_id}', mapping vers PLOT-001")
+        return 'PLOT-001'
     
     def __init__(self):
         """Initialise les consumers et producer Kafka"""
@@ -97,8 +172,9 @@ class KafkaService:
                     logger.info(f"Reçu water.forecast: plot={data.get('plot_id')}")
                     
                     # Normaliser les noms de champs
+                    raw_plot_id = data.get('plotId') or data.get('plot_id')
                     normalized_data = {
-                        'plot_id': data.get('plotId') or data.get('plot_id'),
+                        'plot_id': self._normalize_plot_id(raw_plot_id),
                         'soil_moisture': data.get('soilMoisture') or data.get('soil_moisture'),
                         'temperature': data.get('temperature'),
                         'humidity': data.get('humidity'),
@@ -138,16 +214,35 @@ class KafkaService:
             for message in consumer:
                 try:
                     data = message.value
-                    logger.info(f"Reçu disease.detected: plot={data.get('plot_id')}, "
-                               f"disease={data.get('disease_name')}")
+                    
+                    # MS3 produit: {image_path, detection_results: {predicted_class, confidence, is_diseased, ...}}
+                    detection_results = data.get('detection_results', {})
+                    
+                    # Extraire plot_id depuis image_path (ex: "mixed_images/Apple___scab_1.jpg" -> "plot_001")
+                    image_path = data.get('image_path', '')
+                    # Utiliser le nom de fichier comme identifiant de plot temporaire
+                    plot_id = data.get('plot_id') or data.get('plotId') or os.path.basename(image_path).split('.')[0] or 'unknown_plot'
+                    
+                    # Extraire le nom de maladie depuis predicted_class
+                    disease_name = detection_results.get('predicted_class', data.get('disease_name') or data.get('diseaseName'))
+                    confidence = detection_results.get('confidence', data.get('confidence'))
+                    is_diseased = detection_results.get('is_diseased', False)
+                    
+                    logger.info(f"Reçu disease.detected: plot={plot_id}, "
+                               f"disease={disease_name}, confidence={confidence}")
+                    
+                    # Si pas de maladie détectée (healthy), ignorer
+                    if not is_diseased:
+                        logger.debug(f"Plante saine détectée, pas de recommandation générée")
+                        continue
                     
                     # Normaliser les noms de champs
                     normalized_data = {
-                        'plot_id': data.get('plotId') or data.get('plot_id'),
-                        'disease_name': data.get('diseaseName') or data.get('disease_name'),
-                        'confidence': data.get('confidence'),
-                        'severity': data.get('severity'),
-                        'crop_type': data.get('cropType') or data.get('crop_type')
+                        'plot_id': plot_id,
+                        'disease_name': disease_name,
+                        'confidence': confidence,
+                        'severity': data.get('severity') or ('HIGH' if confidence and confidence > 0.8 else 'MEDIUM'),
+                        'crop_type': data.get('cropType') or data.get('crop_type') or self._extract_crop_from_class(disease_name)
                     }
                     
                     # Appliquer règles
@@ -186,8 +281,9 @@ class KafkaService:
                     logger.info(f"Reçu sensor-data: plot={data.get('plot_id')}")
                     
                     # Normaliser les noms de champs
+                    raw_plot_id = data.get('plotId') or data.get('plot_id')
                     normalized_data = {
-                        'plot_id': data.get('plotId') or data.get('plot_id'),
+                        'plot_id': self._normalize_plot_id(raw_plot_id),
                         'soil_moisture': data.get('soilMoisture') or data.get('soil_moisture'),
                         'temperature': data.get('temperature'),
                         'humidity': data.get('humidity'),
