@@ -89,7 +89,5 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
-# Dataset (facultatif - décommentez si vous ne voulez pas versionner les données)
-# 0-Simulateur-Capteurs/Dataset/*.xlsx
-# 0-Simulateur-Capteurs/Dataset/*.xls
-# 0-Simulateur-Capteurs/Dataset/*.csv
+documentation_article.tex
+prepare_dataset.sh

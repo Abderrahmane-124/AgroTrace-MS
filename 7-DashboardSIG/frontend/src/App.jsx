@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { MapContainer, Polygon, Popup, Rectangle } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 
@@ -24,7 +24,55 @@ const cultureColors = {
     default: '#457b9d'
 };
 
-// Zones d'irrigation par défaut (données fictives)
+// Helper function to generate polygon coordinates
+const generatePolygonCoords = (centerLat, centerLng, radius, sides) => {
+    const coords = [];
+    for (let i = 0; i < sides; i++) {
+        const angle = (i * 2 * Math.PI) / sides - Math.PI / 2;
+        coords.push([
+            centerLat + radius * Math.cos(angle) * 1.2,
+            centerLng + radius * Math.sin(angle)
+        ]);
+    }
+    return coords;
+};
+
+// Generate organic field shapes (irregular polygons)
+const generateFieldShape = (centerLat, centerLng, baseRadius, type) => {
+    const shapes = {
+        // Hexagon-like with slight irregularity
+        hexagon: [
+            [centerLat + baseRadius * 0.9, centerLng - baseRadius * 0.2],
+            [centerLat + baseRadius * 0.5, centerLng + baseRadius * 0.8],
+            [centerLat - baseRadius * 0.3, centerLng + baseRadius * 0.9],
+            [centerLat - baseRadius * 0.85, centerLng + baseRadius * 0.3],
+            [centerLat - baseRadius * 0.7, centerLng - baseRadius * 0.6],
+            [centerLat + baseRadius * 0.2, centerLng - baseRadius * 0.85],
+        ],
+        // Pentagon-like organic shape
+        pentagon: [
+            [centerLat + baseRadius * 0.8, centerLng],
+            [centerLat + baseRadius * 0.25, centerLng + baseRadius * 0.75],
+            [centerLat - baseRadius * 0.65, centerLng + baseRadius * 0.45],
+            [centerLat - baseRadius * 0.6, centerLng - baseRadius * 0.5],
+            [centerLat + baseRadius * 0.3, centerLng - baseRadius * 0.8],
+        ],
+        // Octagon-like irregular shape
+        octagon: [
+            [centerLat + baseRadius * 0.7, centerLng - baseRadius * 0.3],
+            [centerLat + baseRadius * 0.8, centerLng + baseRadius * 0.25],
+            [centerLat + baseRadius * 0.35, centerLng + baseRadius * 0.7],
+            [centerLat - baseRadius * 0.2, centerLng + baseRadius * 0.75],
+            [centerLat - baseRadius * 0.65, centerLng + baseRadius * 0.4],
+            [centerLat - baseRadius * 0.7, centerLng - baseRadius * 0.2],
+            [centerLat - baseRadius * 0.35, centerLng - baseRadius * 0.65],
+            [centerLat + baseRadius * 0.25, centerLng - baseRadius * 0.7],
+        ],
+    };
+    return shapes[type] || shapes.hexagon;
+};
+
+// Zones d'irrigation par défaut (données fictives) - with polygon coordinates
 const DEFAULT_ZONES = [
     {
         zone_id: 'ZONE-NORTH-01',
@@ -36,7 +84,7 @@ const DEFAULT_ZONES = [
         irrigation_type: 'drip',
         water_source: 'Puits #1',
         color: '#e63946',
-        bounds: [[-0.3, -0.6], [0.3, -0.1]]
+        positions: generateFieldShape(0.15, -0.35, 0.22, 'hexagon')
     },
     {
         zone_id: 'ZONE-SOUTH-01',
@@ -48,7 +96,7 @@ const DEFAULT_ZONES = [
         irrigation_type: 'sprinkler',
         water_source: 'Réservoir principal',
         color: '#f4a261',
-        bounds: [[-0.3, 0.1], [0.3, 0.6]]
+        positions: generateFieldShape(-0.05, 0.35, 0.28, 'octagon')
     },
     {
         zone_id: 'ZONE-EAST-01',
@@ -60,7 +108,7 @@ const DEFAULT_ZONES = [
         irrigation_type: 'drip',
         water_source: 'Puits #2',
         color: '#2a9d8f',
-        bounds: [[-0.6, -0.25], [-0.35, 0.25]]
+        positions: generateFieldShape(-0.45, -0.05, 0.18, 'pentagon')
     }
 ];
 
@@ -90,6 +138,33 @@ function App() {
     // Pagination states
     const [alertsPage, setAlertsPage] = useState(1);
     const [actionsPage, setActionsPage] = useState(1);
+
+    // Filter states
+    const [diseaseTypeFilter, setDiseaseTypeFilter] = useState('all');
+    const [severityFilter, setSeverityFilter] = useState('all');
+
+    // Get unique disease types from diseases array
+    const uniqueDiseaseTypes = useMemo(() => {
+        const types = [...new Set(diseases.map(d => d.disease_name).filter(Boolean))];
+        return types.sort();
+    }, [diseases]);
+
+    // Severity levels for actions filter (matching system values from 5-RèglesAgro/config.py)
+    const severityLevels = ['URGENT', 'HIGH', 'MEDIUM', 'LOW'];
+
+    // Filtered diseases based on selected disease type
+    const filteredDiseases = useMemo(() => {
+        if (diseaseTypeFilter === 'all') return diseases;
+        return diseases.filter(d => d.disease_name === diseaseTypeFilter);
+    }, [diseases, diseaseTypeFilter]);
+
+    // Filtered recommendations based on selected severity
+    const filteredRecommendations = useMemo(() => {
+        if (severityFilter === 'all') return recommendations;
+        return recommendations.filter(r =>
+            (r.priority || 'MEDIUM').toUpperCase() === severityFilter.toUpperCase()
+        );
+    }, [recommendations, severityFilter]);
 
     // Charger les données
     useEffect(() => {
@@ -142,7 +217,7 @@ function App() {
                     const zonesWithBounds = zones.map((zone, i) => ({
                         ...zone,
                         color: cultureColors[zone.crop_type] || cultureColors.default,
-                        bounds: DEFAULT_ZONES[i]?.bounds || [[-0.2 + i * 0.3, -0.5], [0.2 + i * 0.3, 0.5]]
+                        positions: DEFAULT_ZONES[i]?.positions || generateFieldShape(-0.2 + i * 0.3, 0, 0.2, 'hexagon')
                     }));
                     setIrrigationZones(zonesWithBounds);
                 }
@@ -417,35 +492,55 @@ function App() {
                                     </>
                                 )}
 
-                                {/* Alertes avec pagination */}
+                                {/* Alertes avec pagination et filtre */}
                                 {activeTab === 'alerts' && (
                                     <div className="list-section">
+                                        {/* Filter by disease type */}
+                                        <div className="filter-section">
+                                            <label className="filter-label">🔍 Filtrer par type:</label>
+                                            <select
+                                                className="filter-select"
+                                                value={diseaseTypeFilter}
+                                                onChange={(e) => {
+                                                    setDiseaseTypeFilter(e.target.value);
+                                                    setAlertsPage(1); // Reset to first page when filter changes
+                                                }}
+                                            >
+                                                <option value="all">Toutes les maladies ({diseases.length})</option>
+                                                {uniqueDiseaseTypes.map(type => (
+                                                    <option key={type} value={type}>
+                                                        {type} ({diseases.filter(d => d.disease_name === type).length})
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+
                                         <div className="list-header">
-                                            <h3>🦠 Maladies ({diseases.length})</h3>
-                                            {getTotalPages(diseases) > 1 && (
+                                            <h3>🦠 Maladies ({filteredDiseases.length})</h3>
+                                            {getTotalPages(filteredDiseases) > 1 && (
                                                 <div className="pagination">
                                                     <button
                                                         className="btn-page"
                                                         disabled={alertsPage === 1}
                                                         onClick={() => setAlertsPage(p => p - 1)}
                                                     >←</button>
-                                                    <span>{alertsPage}/{getTotalPages(diseases)}</span>
+                                                    <span>{alertsPage}/{getTotalPages(filteredDiseases)}</span>
                                                     <button
                                                         className="btn-page"
-                                                        disabled={alertsPage === getTotalPages(diseases)}
+                                                        disabled={alertsPage === getTotalPages(filteredDiseases)}
                                                         onClick={() => setAlertsPage(p => p + 1)}
                                                     >→</button>
                                                 </div>
                                             )}
                                         </div>
 
-                                        {diseases.length === 0 ? (
+                                        {filteredDiseases.length === 0 ? (
                                             <div className="empty-state">
                                                 <div className="empty-state-icon">🌿</div>
-                                                <p>Aucune maladie détectée</p>
+                                                <p>{diseaseTypeFilter === 'all' ? 'Aucune maladie détectée' : `Aucune maladie de type "${diseaseTypeFilter}"`}</p>
                                             </div>
                                         ) : (
-                                            paginateArray(diseases, alertsPage).map((d, i) => (
+                                            paginateArray(filteredDiseases, alertsPage).map((d, i) => (
                                                 <div
                                                     key={i}
                                                     className="list-item clickable critical"
@@ -482,35 +577,64 @@ function App() {
                                     </div>
                                 )}
 
-                                {/* Actions avec pagination */}
+                                {/* Actions avec pagination et filtre */}
                                 {activeTab === 'actions' && (
                                     <div className="list-section">
+                                        {/* Filter by severity */}
+                                        <div className="filter-section">
+                                            <label className="filter-label">⚡ Filtrer par sévérité:</label>
+                                            <select
+                                                className="filter-select"
+                                                value={severityFilter}
+                                                onChange={(e) => {
+                                                    setSeverityFilter(e.target.value);
+                                                    setActionsPage(1); // Reset to first page when filter changes
+                                                }}
+                                            >
+                                                <option value="all">Toutes les priorités ({recommendations.length})</option>
+                                                {severityLevels.map(level => {
+                                                    const count = recommendations.filter(r =>
+                                                        (r.priority || 'MEDIUM').toUpperCase() === level
+                                                    ).length;
+                                                    return (
+                                                        <option key={level} value={level}>
+                                                            {level === 'URGENT' && '🔴 '}
+                                                            {level === 'HIGH' && '🟠 '}
+                                                            {level === 'MEDIUM' && '🟡 '}
+                                                            {level === 'LOW' && '🟢 '}
+                                                            {level} ({count})
+                                                        </option>
+                                                    );
+                                                })}
+                                            </select>
+                                        </div>
+
                                         <div className="list-header">
-                                            <h3>📋 Recommandations ({recommendations.length})</h3>
-                                            {getTotalPages(recommendations) > 1 && (
+                                            <h3>📋 Recommandations ({filteredRecommendations.length})</h3>
+                                            {getTotalPages(filteredRecommendations) > 1 && (
                                                 <div className="pagination">
                                                     <button
                                                         className="btn-page"
                                                         disabled={actionsPage === 1}
                                                         onClick={() => setActionsPage(p => p - 1)}
                                                     >←</button>
-                                                    <span>{actionsPage}/{getTotalPages(recommendations)}</span>
+                                                    <span>{actionsPage}/{getTotalPages(filteredRecommendations)}</span>
                                                     <button
                                                         className="btn-page"
-                                                        disabled={actionsPage === getTotalPages(recommendations)}
+                                                        disabled={actionsPage === getTotalPages(filteredRecommendations)}
                                                         onClick={() => setActionsPage(p => p + 1)}
                                                     >→</button>
                                                 </div>
                                             )}
                                         </div>
 
-                                        {recommendations.length === 0 ? (
+                                        {filteredRecommendations.length === 0 ? (
                                             <div className="empty-state">
                                                 <div className="empty-state-icon">✅</div>
-                                                <p>Aucune action en attente</p>
+                                                <p>{severityFilter === 'all' ? 'Aucune action en attente' : `Aucune action de priorité "${severityFilter}"`}</p>
                                             </div>
                                         ) : (
-                                            paginateArray(recommendations, actionsPage).map((rec, i) => (
+                                            paginateArray(filteredRecommendations, actionsPage).map((rec, i) => (
                                                 <div
                                                     key={i}
                                                     className={`list-item clickable ${(rec.priority || 'medium').toLowerCase()}`}
@@ -551,43 +675,96 @@ function App() {
                         scrollWheelZoom={true}
                         dragging={true}
                     >
-                        {/* Fond de carte fictif vert foncé */}
+                        {/* Fond de carte agricole avec texture */}
                         <Rectangle
                             bounds={[[-2, -3], [2, 3]]}
                             pathOptions={{
-                                fillColor: '#1a472a',
+                                fillColor: '#0f2d1f',
                                 fillOpacity: 1,
                                 stroke: false
                             }}
                         />
 
-                        {/* Grille de fond */}
-                        {[-0.5, 0, 0.5].map(lng => (
+                        {/* Background terrain pattern - horizontal stripes for soil texture */}
+                        {Array.from({ length: 20 }, (_, i) => (
                             <Rectangle
-                                key={`v${lng}`}
-                                bounds={[[-1, lng - 0.005], [1, lng + 0.005]]}
-                                pathOptions={{ fillColor: '#2d5a3d', fillOpacity: 0.3, stroke: false }}
-                            />
-                        ))}
-                        {[-0.5, 0, 0.5].map(lat => (
-                            <Rectangle
-                                key={`h${lat}`}
-                                bounds={[[lat - 0.005, -1], [lat + 0.005, 1]]}
-                                pathOptions={{ fillColor: '#2d5a3d', fillOpacity: 0.3, stroke: false }}
+                                key={`soil-h${i}`}
+                                bounds={[[-1 + i * 0.1, -1.5], [-0.95 + i * 0.1, 1.5]]}
+                                pathOptions={{
+                                    fillColor: i % 2 === 0 ? '#1a3d2a' : '#153525',
+                                    fillOpacity: 0.6,
+                                    stroke: false
+                                }}
                             />
                         ))}
 
-                        {/* Polygones des zones d'irrigation */}
+                        {/* Tree/vegetation decorations around the edges */}
+                        {[...Array(12)].map((_, i) => {
+                            const angle = (i / 12) * Math.PI * 2;
+                            const radius = 0.85;
+                            return (
+                                <Polygon
+                                    key={`tree-${i}`}
+                                    positions={[
+                                        [Math.cos(angle) * radius, Math.sin(angle) * radius],
+                                        [Math.cos(angle) * radius + 0.03, Math.sin(angle) * radius + 0.02],
+                                        [Math.cos(angle) * radius - 0.02, Math.sin(angle) * radius + 0.04],
+                                    ]}
+                                    pathOptions={{
+                                        fillColor: '#2d5a3d',
+                                        fillOpacity: 0.4,
+                                        stroke: false
+                                    }}
+                                />
+                            );
+                        })}
+
+                        {/* Path/road patterns */}
+                        <Polygon
+                            positions={[
+                                [-0.8, -0.02],
+                                [-0.8, 0.02],
+                                [0.6, 0.03],
+                                [0.6, -0.03],
+                            ]}
+                            pathOptions={{
+                                fillColor: '#3d2b1f',
+                                fillOpacity: 0.5,
+                                weight: 1,
+                                color: '#4a3728',
+                                dashArray: '5, 5'
+                            }}
+                        />
+                        <Polygon
+                            positions={[
+                                [-0.02, -0.9],
+                                [0.02, -0.9],
+                                [0.03, 0.5],
+                                [-0.03, 0.5],
+                            ]}
+                            pathOptions={{
+                                fillColor: '#3d2b1f',
+                                fillOpacity: 0.5,
+                                weight: 1,
+                                color: '#4a3728',
+                                dashArray: '5, 5'
+                            }}
+                        />
+
+                        {/* Polygones des zones d'irrigation - formes organiques multi-côtés */}
                         {irrigationZones.map((zone) => (
-                            <Rectangle
+                            <Polygon
                                 key={zone.zone_id}
-                                bounds={zone.bounds}
+                                positions={zone.positions}
                                 pathOptions={{
                                     fillColor: zone.color,
-                                    fillOpacity: selectedZone === zone.zone_id ? 0.9 : 0.7,
+                                    fillOpacity: selectedZone === zone.zone_id ? 0.85 : 0.65,
                                     weight: selectedZone === zone.zone_id ? 4 : 2,
-                                    color: selectedZone === zone.zone_id ? '#fff' : zone.color,
-                                    opacity: 1
+                                    color: selectedZone === zone.zone_id ? '#ffffff' : '#1a1a1a',
+                                    opacity: 1,
+                                    lineCap: 'round',
+                                    lineJoin: 'round',
+                                    dashArray: selectedZone === zone.zone_id ? '' : ''
                                 }}
                                 eventHandlers={{
                                     click: () => {
@@ -615,7 +792,7 @@ function App() {
                                         </button>
                                     </div>
                                 </Popup>
-                            </Rectangle>
+                            </Polygon>
                         ))}
                     </MapContainer>
 
