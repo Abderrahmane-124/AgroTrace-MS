@@ -89,5 +89,5 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
-documentation_article.tex
+# documentation_article.tex
 prepare_dataset.sh

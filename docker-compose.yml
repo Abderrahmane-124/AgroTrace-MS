@@ -311,12 +311,108 @@ services:
     networks:
       - agrotrace-network
 
+  # ==================== SONARQUBE ====================
+  
+  # PostgreSQL Database for SonarQube
+  sonarqube-db:
+    image: postgres:16-alpine
+    container_name: sonarqube-db
+    environment:
+      - POSTGRES_USER=sonar
+      - POSTGRES_PASSWORD=sonar
+      - POSTGRES_DB=sonarqube
+    volumes:
+      - sonarqube_db_data:/var/lib/postgresql/data
+    networks:
+      - agrotrace-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sonar -d sonarqube"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # SonarQube Server
+  sonarqube:
+    image: sonarqube:lts-community
+    container_name: sonarqube
+    ports:
+      - "9090:9000"
+    environment:
+      - SONAR_JDBC_URL=jdbc:postgresql://sonarqube-db:5432/sonarqube
+      - SONAR_JDBC_USERNAME=sonar
+      - SONAR_JDBC_PASSWORD=sonar
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+    depends_on:
+      sonarqube-db:
+        condition: service_healthy
+    networks:
+      - agrotrace-network
+
+  # Sonar Scanner CLI (run with: docker compose --profile scan run sonar-scanner)
+  sonar-scanner:
+    image: sonarsource/sonar-scanner-cli:latest
+    container_name: sonar-scanner
+    environment:
+      - SONAR_HOST_URL=http://sonarqube:9000
+    volumes:
+      - .:/usr/src
+    working_dir: /usr/src
+    depends_on:
+      - sonarqube
+    networks:
+      - agrotrace-network
+    profiles:
+      - scan
+
+  # ==================== JENKINS CI/CD ====================
+  
+  jenkins:
+    image: jenkins/jenkins:lts
+    container_name: jenkins
+    privileged: true
+    user: root
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    environment:
+      - DOCKER_HOST=tcp://docker:2376
+      - DOCKER_CERT_PATH=/certs/client
+      - DOCKER_TLS_VERIFY=1
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - jenkins_docker_certs:/certs/client:ro
+    depends_on:
+      - docker
+    networks:
+      - agrotrace-network
+
+  docker:
+    image: docker:dind
+    container_name: jenkins-docker
+    privileged: true
+    environment:
+      - DOCKER_TLS_CERTDIR=/certs
+    volumes:
+      - jenkins_docker_certs:/certs/client
+      - jenkins_home:/var/jenkins_home
+    networks:
+      - agrotrace-network
+
 volumes:
   kafka_data:
   timescaledb_data:
   minio_data:
   postgres_irrigation_data:
   postgis_data:
+  sonarqube_db_data:
+  sonarqube_data:
+  sonarqube_extensions:
+  sonarqube_logs:
+  jenkins_home:
+  jenkins_docker_certs:
 
 networks:
   agrotrace-network:
