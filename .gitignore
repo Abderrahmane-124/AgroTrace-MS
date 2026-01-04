@@ -91,3 +91,5 @@ coverage.xml
 
 # documentation_article.tex
 prepare_dataset.sh
+scan-all-microservices.sh
+scan-all-microservices.bat

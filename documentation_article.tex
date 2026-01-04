@@ -213,7 +213,7 @@ Figure~\ref{fig:schema_simplifie} presents a simplified overview of the AgroTrac
 \begin{figure}[H]
     \centering
     \includegraphics[width=1\textwidth]{architecture.png}
-    \caption{AgroTrace-MS Architecture}
+    \caption{Schéma Global detaillée de l'Architecture AgroTrace-MS}
     \label{fig:architecture}
 \end{figure}
 
@@ -464,6 +464,32 @@ The system architecture was validated through:
     \item \textbf{BPMN Process Diagrams}: Document the dynamic behavior and data flow across services
     \item \textbf{Integration Testing}: End-to-end tests validate the complete Kafka-based data pipeline
 \end{itemize}
+
+\subsection{Jenkins CI/CD Pipeline}
+
+AgroTrace-MS implements a comprehensive CI/CD pipeline using Jenkins, automating the build and deployment workflow. The pipeline is defined in a declarative \texttt{Jenkinsfile} at the repository root and leverages Docker-in-Docker (DinD) for containerized builds.
+
+\begin{enumerate}
+    \item \textbf{Checkout Stage}: Retrieves the latest source code from the Git repository
+    
+    \item \textbf{Build Docker Images}: Parallel execution builds Docker images for all nine microservice components:
+    \begin{itemize}
+        \item MS0--MS6: Individual backend services
+        \item MS7 Backend: Dashboard API service
+        \item MS7 Frontend: React.js web application
+    \end{itemize}
+    
+    \item \textbf{Deploy to Production}: For the \texttt{main} branch, executes production deployment using \texttt{docker compose up -d}
+\end{enumerate}
+
+The pipeline includes post-execution hooks for cleanup (\texttt{docker system prune}) and status notifications for success or failure scenarios. Figure~\ref{fig:jenkins} shows the successful execution of the CI/CD pipeline with all nine microservices built in parallel.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\textwidth]{jenkins-pipeline.png}
+    \caption{Jenkins CI/CD Pipeline - Parallel Docker Build of All Microservices}
+    \label{fig:jenkins}
+\end{figure}
 
 \subsection{Containerization and Deployment}
 
